@@ -180,8 +180,8 @@ function template() {
         </button>
 
         <div class="flex-1 min-w-0">
-          <p class="hidden sm:block text-sm font-bold leading-tight" style="color: var(--primary); font-family: var(--font-family-display)">
-            Listen to this section
+           <p class="text-sm font-bold leading-tight" style="color: var(--primary); font-family: var(--font-family-display)">
+            LumiVoice <span class="hidden sm:inline font-normal" style="color: var(--muted-foreground)">· Listen to this section</span>
           </p>
           <p class="text-sm truncate" style="color: var(--muted-foreground)">${title}</p>
         </div>

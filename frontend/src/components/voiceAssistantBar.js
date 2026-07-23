@@ -99,7 +99,7 @@ function template() {
 
   // ── Settings panel (API key) replaces the bottom row when open ──
   const bottomRow = showSettings ? `
-      <div class="flex flex-col gap-2 px-4 sm:px-5 py-3">
+      <div class="flex flex-col gap-2 px-3 sm:px-5 py-3">
         <div class="flex items-center gap-2">
           <button class="js-va-settings-back p-1 rounded-lg cursor-pointer hover:bg-white/40" style="color: var(--primary)" title="Back">
             ${icon.back}
@@ -109,19 +109,19 @@ function template() {
         </div>
         <label class="text-xs" style="color: var(--muted-foreground)">Your Gemini API key</label>
         <div class="flex items-center gap-2">
-          <div class="flex-1 flex items-center rounded-lg px-3" style="background:#fff; border:1px solid var(--border); height:38px">
-            <input class="js-va-key flex-1 bg-transparent outline-none text-sm" type="password"
+          <div class="flex-1 min-w-0 flex items-center rounded-lg px-3" style="background:#fff; border:1px solid var(--border); height:38px">
+            <input class="js-va-key flex-1 min-w-0 bg-transparent outline-none text-sm" type="password"
                    placeholder="Paste your key here" value="${getApiKey()}"
                    style="font-family: var(--font-mono, monospace); color:#374151" />
-            <button class="js-va-key-toggle p-1 cursor-pointer" style="color: var(--muted-foreground)" title="Show / hide">
+            <button class="js-va-key-toggle p-1 cursor-pointer shrink-0" style="color: var(--muted-foreground)" title="Show / hide">
               ${icon.eye}
             </button>
           </div>
-          <button class="js-va-key-save px-4 rounded-lg text-sm font-medium text-white cursor-pointer"
+          <button class="js-va-key-save px-4 rounded-lg text-sm font-medium text-white cursor-pointer shrink-0"
                   style="background: var(--primary); height:38px">Save</button>
         </div>
         <div class="flex items-center gap-1.5">
-          <span class="inline-block w-2 h-2 rounded-full" style="background:${hasApiKey() ? "var(--primary)" : "#cbd5e1"}"></span>
+          <span class="inline-block w-2 h-2 rounded-full shrink-0" style="background:${hasApiKey() ? "var(--primary)" : "#cbd5e1"}"></span>
           <span class="text-xs" style="color: var(--muted-foreground)">
             ${hasApiKey() ? "Key saved on this device. Using your key." : "No key saved. Using the server default."}
           </span>
@@ -131,24 +131,25 @@ function template() {
         </p>
       </div>
   ` : `
-      <div class="flex items-center gap-2 px-4 sm:px-5 py-3">
-        <button class="js-va-original flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-medium transition-all cursor-pointer"
+      <div class="flex flex-wrap items-center gap-2 px-3 sm:px-5 py-3">
+        <button class="js-va-original flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-medium transition-all cursor-pointer shrink-0"
                 style="background: ${mode === "original" ? "#fff" : "rgba(255,255,255,0.55)"};
                        color: var(--primary);
                        border: 1.5px solid ${mode === "original" ? "var(--primary)" : "transparent"}">
           ${icon.doc} Original
         </button>
 
-        <button class="js-va-ai flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-medium text-white transition-all cursor-pointer"
+        <button class="js-va-ai flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-medium text-white transition-all cursor-pointer shrink-0"
                 style="background: ${loading ? "#8b83e6" : "#6d5ce7"}; opacity: ${loading ? ".85" : "1"}">
           ${loading ? icon.loader : icon.spark}
-          ${loading ? "Summarizing…" : "Summarize with AI"}
+          <span class="hidden sm:inline">${loading ? "Summarizing…" : "Summarize with AI"}</span>
+          <span class="sm:hidden">${loading ? "…" : "AI"}</span>
         </button>
 
-        <div class="flex-1"></div>
+        <div class="flex-1 min-w-0"></div>
 
         <!-- Speed selector -->
-        <div class="flex items-center gap-0.5 p-0.5 rounded-lg" style="background: rgba(255,255,255,0.55)">
+        <div class="flex items-center gap-0.5 p-0.5 rounded-lg shrink-0" style="background: rgba(255,255,255,0.55)">
           ${rateBtns}
         </div>
       </div>
@@ -164,38 +165,38 @@ function template() {
                 box-shadow: 0 8px 30px rgba(22,163,74,0.15)">
 
       <!-- Top row: play + restart + title + settings + minimize + close -->
-      <div class="flex items-center gap-3 px-4 sm:px-5 py-3">
-        <button class="js-va-play w-11 h-11 rounded-full flex items-center justify-center text-white shrink-0 cursor-pointer transition-transform hover:scale-105"
+      <div class="flex items-center gap-2 sm:gap-3 px-3 sm:px-5 py-3">
+        <button class="js-va-play w-9 h-9 sm:w-11 sm:h-11 rounded-full flex items-center justify-center text-white shrink-0 cursor-pointer transition-transform hover:scale-105"
                 style="background: var(--primary)"
                 title="${playing && !paused ? "Pause" : "Play"}">
           ${loading ? icon.loader : (playing && !paused ? icon.pause : icon.play)}
         </button>
 
         <!-- Restart button (square inside a circle) -->
-        <button class="js-va-restart w-11 h-11 rounded-full flex items-center justify-center shrink-0 cursor-pointer transition-transform hover:scale-105"
+        <button class="js-va-restart w-9 h-9 sm:w-11 sm:h-11 rounded-full flex items-center justify-center shrink-0 cursor-pointer transition-transform hover:scale-105"
                 style="background: #fff; color: var(--primary); border: 1.5px solid var(--primary)"
                 title="Restart from the beginning">
           ${icon.restart}
         </button>
 
         <div class="flex-1 min-w-0">
-          <p class="text-sm font-bold leading-tight" style="color: var(--primary); font-family: var(--font-family-display)">
+          <p class="hidden sm:block text-sm font-bold leading-tight" style="color: var(--primary); font-family: var(--font-family-display)">
             Listen to this section
           </p>
           <p class="text-sm truncate" style="color: var(--muted-foreground)">${title}</p>
         </div>
 
-        <button class="js-va-settings p-1.5 rounded-lg transition-colors cursor-pointer hover:bg-white/40"
+        <button class="js-va-settings p-1 sm:p-1.5 rounded-lg transition-colors cursor-pointer hover:bg-white/40 shrink-0"
                 style="color: ${showSettings ? "#6d5ce7" : "var(--primary)"}" title="AI settings">
           ${icon.gear}
         </button>
 
-        <button class="js-va-minimize p-1.5 rounded-lg transition-colors cursor-pointer hover:bg-white/40"
+        <button class="js-va-minimize p-1 sm:p-1.5 rounded-lg transition-colors cursor-pointer hover:bg-white/40 shrink-0"
                 style="color: var(--primary)" title="Minimize">
           ${icon.minimize}
         </button>
 
-        <button class="js-va-close p-1.5 rounded-lg transition-colors cursor-pointer hover:bg-white/40"
+        <button class="js-va-close p-1 sm:p-1.5 rounded-lg transition-colors cursor-pointer hover:bg-white/40 shrink-0"
                 style="color: var(--primary)" title="Close">
           ${icon.close}
         </button>
@@ -215,9 +216,10 @@ function hostEl() {
     el = document.createElement("div");
     el.id = "lumivoice-host";
     // Floating overlay: fixed below the navbar, takes no space in the flow.
+    // Tighter side padding on phones so the bar gets the full usable width.
     el.style.cssText =
       "position:fixed; top:76px; left:0; right:0; z-index:60;" +
-      "padding:0 1rem; pointer-events:none;";
+      "padding:0 0.5rem; pointer-events:none;";
     document.body.appendChild(el);
   }
   return el;

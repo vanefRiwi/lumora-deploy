@@ -20,7 +20,7 @@ import {
   summarizeText, setApiKey, getApiKey, hasApiKey,
 } from "../services/ttsService.js";
 
-const RATES = [0.75, 1, 1.5];
+const RATES = [0.75, 1, 1.25];
 
 const icon = {
   play:  `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>`,

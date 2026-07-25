@@ -1,6 +1,6 @@
-// ─── Login View ───────────────────────────────────────────────────────────────
+ // ─── Login View ───────────────────────────────────────────────
 // Replicates the Figma design in Vanilla JS (green panel + form).
-// This is the only view implemented so far.
+
 
 import { api } from "../../helpers/api.js";
 import { saveSession } from "../../helpers/auth.js";
@@ -96,8 +96,15 @@ export function loginView() {
             <p class="js-error text-sm text-red-600 hidden"></p>
 
             <button type="submit"
-              class="w-full text-white py-3 rounded-xl text-sm font-semibold transition-colors mt-2"
-              style="background: var(--primary)">Sign In</button>
+              class="js-submit-btn relative w-full text-white py-3 rounded-xl text-sm font-semibold transition-all mt-2 flex items-center justify-center gap-1.5 disabled:opacity-75 disabled:cursor-not-allowed"
+              style="background: var(--primary)">
+              <span class="js-btn-text">Sign In</span>
+              <span class="js-btn-dots hidden flex items-center gap-1">
+                <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" style="animation-delay: 0ms"></span>
+                <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" style="animation-delay: 150ms"></span>
+                <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" style="animation-delay: 300ms"></span>
+              </span>
+            </button>
           </form>
 
           <p class="text-center text-sm mt-6" style="color: var(--muted-foreground)">
@@ -146,9 +153,17 @@ export function initLogin() {
   const form = root.querySelector(".js-login-form");
   const errorEl = root.querySelector(".js-error");
 
+  const submitBtn = form.querySelector(".js-submit-btn");
+  const btnText = form.querySelector(".js-btn-text");
+  const btnDots = form.querySelector(".js-btn-dots");
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     errorEl.classList.add("hidden");
+
+    submitBtn.disabled = true;
+    btnText.textContent = "Signing in";
+    btnDots.classList.remove("hidden");
 
     const email = form.email.value.trim();
     const password = form.password.value;
@@ -163,6 +178,10 @@ export function initLogin() {
     } catch (err) {
       errorEl.textContent = err.message;
       errorEl.classList.remove("hidden");
+
+      submitBtn.disabled = false;
+      btnText.textContent = "Sign In";
+      btnDots.classList.add("hidden");
     }
   });
 }

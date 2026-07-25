@@ -76,12 +76,19 @@ function pickEnglishVoice() {
   const isEnUS = (v) => /en[-_]US/i.test(v.lang);
   const isEnAny = (v) => /^en\b|en[-_]/i.test(v.lang);
 
+  // ⚠️ ONLY local voices are ever returned. Network voices (like "Google US
+  // English") stream their audio from Google's servers, and on many
+  // Chrome/Windows/Linux setups that stream never arrives: the engine reports
+  // speaking:true but no sound comes out, with no error. Confirmed by testing.
+  //
+  // If the only English voice on the device is a network one, we return null
+  // and speak with NO voice assigned — the browser then uses its built-in
+  // default engine, which always produces sound. This is exactly what the
+  // original, universally-working version of this file did.
   return (
-    voices.find((v) => isEnUS(v) && v.localService && /natural|samantha|zira|david/i.test(v.name)) ||
+    voices.find((v) => isEnUS(v) && v.localService && /natural|zira|david|mark|hazel/i.test(v.name)) ||
     voices.find((v) => isEnUS(v) && v.localService) ||
     voices.find((v) => isEnAny(v) && v.localService) ||
-    voices.find((v) => isEnUS(v)) ||          // fall back to a network voice
-    voices.find((v) => isEnAny(v)) ||
     null
   );
 }
@@ -164,15 +171,20 @@ export function setOnStateChange(cb) {
 
 /**
  * Chrome pauses synthesis after roughly 15 seconds of continuous speech, a
- * long-standing engine bug. Toggling pause/resume every 10s resets its timer
- * so long passages finish. No-op harm on browsers that don't need it.
+ * long-standing engine bug. The common fix is a periodic pause()+resume(),
+ * BUT on Chrome/Windows with NETWORK voices ("Google US English") that pause()
+ * leaves the engine in a state where the audio goes silent even though
+ * `speaking` stays true — which was making the reading start with no sound.
+ *
+ * Calling resume() on its own (no pause first) resets the same internal timer
+ * WITHOUT muting the voice. It's a harmless no-op when nothing is paused, so
+ * it's safe on every browser.
  */
 function startKeepAlive() {
   stopKeepAlive();
   keepAliveTimer = setInterval(() => {
-    if (speechSynthesis.speaking && !speechSynthesis.paused) {
-      speechSynthesis.pause();
-      speechSynthesis.resume();
+    if (speechSynthesis.speaking) {
+      speechSynthesis.resume();   // reset the timer; never pause a network voice
     }
   }, 10000);
 }
@@ -312,9 +324,9 @@ function launchUtterance(text, startChar, silent, bareVoice = false) {
 
   speechSynthesis.speak(utterance);
 
-  // No English voice on this device (common on Android without the Google
-  // TTS English pack). We speak anyway, but the UI explains the accent.
-  if (!voice) emitState("no-english-voice");
+  // Note: when `voice` is null we deliberately speak with the browser's
+  // default engine (see pickEnglishVoice). That is the reliable path on
+  // Chrome/Windows, so it is NOT a warning condition anymore.
 
   // Brave and other privacy browsers accept speak() without ever producing
   // sound or firing onerror. If nothing started after a while, report it.

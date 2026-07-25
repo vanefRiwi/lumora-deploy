@@ -280,6 +280,9 @@ function launchUtterance(text, startChar, silent, bareVoice = false) {
   };
 
   utterance.onstart = () => {
+    // May already have been flipped by the poll below (network voices on
+    // Chrome sometimes never fire this event, so we can't rely on it alone).
+    if (isSpeaking) return;
     isSpeaking = true;
     speechStartedAt = Date.now();   // baseline for the time estimate
     startKeepAlive();               // prevent Chrome's ~15s auto-pause
@@ -319,29 +322,57 @@ function launchUtterance(text, startChar, silent, bareVoice = false) {
   // The window is generous (3.5s) because Chrome on Windows can take a couple
   // of seconds to start a NETWORK voice (the "Google" voices stream their
   // audio). A shorter timeout produced false "error" reports there.
+  // ── Startup + failure detection by POLLING, not by trusting onstart ──
+  //
+  // Root cause of the "Original does nothing" bug on Chrome/Windows: with a
+  // NETWORK voice ("Google US English"), Chrome often does NOT fire onstart
+  // even though audio is playing. The old code relied on onstart to flip the
+  // state and to decide the utterance had failed, so a working voice looked
+  // dead and the watchdog cancelled it.
+  //
+  // speechSynthesis.speaking IS reliable, so we poll it. As soon as the engine
+  // reports it's speaking, we mark playing ourselves (in case onstart never
+  // fires). If after the whole window it never started AND isn't pending, only
+  // then is it a real failure.
   const watchdogText = currentText;
-  setTimeout(() => {
-    // Only fire if THIS utterance is still the current one and nothing ever
-    // played. `pending` is true while the browser has queued the utterance but
-    // has not started it yet, which is exactly the Chrome/Windows case we must
-    // NOT treat as a failure.
-    const stillNothing =
-      !isSpeaking &&
-      !speechSynthesis.speaking &&
-      !speechSynthesis.pending;
-    if (!stillNothing || currentText !== watchdogText) return;
+  let waited = 0;
+  const POLL = 250;
+  const MAX_WAIT = 4000;   // network voices can take a few seconds to begin
 
-    // Recovery: an explicitly-assigned voice can fail silently on some
-    // Chrome/Linux/Windows setups. Retry ONCE with lang-only (no voice
-    // object), which is what the original universally-working version did.
-    // Only after that fails too do we report the error (Brave, no engine).
+  const poll = setInterval(() => {
+    // A newer utterance replaced this one: stop watching.
+    if (currentText !== watchdogText) { clearInterval(poll); return; }
+
+    // Engine is speaking. If onstart never fired, flip the state now.
+    if (speechSynthesis.speaking) {
+      clearInterval(poll);
+      if (!isSpeaking) {
+        isSpeaking = true;
+        if (!speechStartedAt) speechStartedAt = Date.now();
+        startKeepAlive();
+        emitState("playing");
+      }
+      return;
+    }
+
+    // Still queued (pending) — keep waiting, this is normal for network voices.
+    waited += POLL;
+    if (waited < MAX_WAIT) return;
+
+    // Time's up and nothing ever played.
+    clearInterval(poll);
+    if (isSpeaking || speechSynthesis.speaking) return;   // it did start, we're fine
+
+    // One recovery attempt with no voice object (lang-only), like the old
+    // version that worked everywhere. Only if THAT also stays silent is it a
+    // genuine failure (Brave blocking, or no speech engine at all).
     if (!bareVoice) {
       speechSynthesis.cancel();
       launchUtterance(text, startChar, silent, true);
     } else {
       emitState("error");
     }
-  }, 2500);
+  }, POLL);
 }
 
 /** Pauses the current reading. */

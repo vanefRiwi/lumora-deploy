@@ -59,11 +59,6 @@ const CHARS_PER_SECOND = 15;
 // having to poll the state.
 let onStateChange = null;
 
-// Cached English voice. The browser loads voices asynchronously, so we pick
-// one lazily and remember it. Without this, speechSynthesis uses the system
-// default voice (which on a Spanish-configured Mac is a Spanish voice trying
-// to pronounce English words, hence the odd accent).
-let englishVoice = null;
 
 /** true if this browser exposes the Web Speech API at all. */
 export function isSpeechSupported() {
@@ -92,9 +87,12 @@ function pickEnglishVoice() {
 }
 
 function getEnglishVoice() {
-  if (englishVoice) return englishVoice;
-  englishVoice = pickEnglishVoice();
-  return englishVoice;
+  // ⚠️ Picked FRESH on every call, never cached. A voice object obtained from
+  // an earlier getVoices() can become a stale reference in Chrome (after SPA
+  // navigations or voice-list refreshes), and speak() with a stale voice
+  // fails SILENTLY — no sound, no onerror. That was the "Original does
+  // nothing" bug on Windows/Linux Chrome.
+  return pickEnglishVoice();
 }
 
 /**
@@ -114,7 +112,6 @@ function waitForVoices(timeout = 2000) {
     const finish = () => {
       if (done) return;
       done = true;
-      englishVoice = pickEnglishVoice();   // refresh the cache
       resolve(speechSynthesis.getVoices() || []);
     };
 
@@ -123,10 +120,6 @@ function waitForVoices(timeout = 2000) {
   });
 }
 
-// Voices may not be ready at load time; refresh the cache when they arrive.
-if (isSpeechSupported()) {
-  speechSynthesis.onvoiceschanged = () => { englishVoice = pickEnglishVoice(); };
-}
 
 /**
  * Best guess of how far into `currentText` the voice currently is.
@@ -250,7 +243,7 @@ export function speakText(text = "", startChar = 0, { silent = false } = {}) {
  * Builds the utterance and hands it to the engine. Split out from speakText so
  * it can run synchronously right after the click (see the gesture note above).
  */
-function launchUtterance(text, startChar, silent) {
+function launchUtterance(text, startChar, silent, bareVoice = false) {
   // Remember the full text so we can resume from an offset later.
   currentText = text;
   currentCharIndex = startChar > 0 ? startChar : 0;
@@ -267,12 +260,14 @@ function launchUtterance(text, startChar, silent) {
   utterance.rate = currentRate;
   utterance.lang = "en-US";
 
-  // Assign an actual English voice when one exists. Setting lang alone is not
-  // enough: the browser keeps the system default voice unless we assign one.
-  // If the device has NO English pack installed we still speak (using the
-  // default voice) rather than staying silent, and warn the user below.
-  const voice = getEnglishVoice();
-  if (voice) utterance.voice = voice;
+  // Try to assign an English voice so a Spanish-configured system doesn't
+  // read English text with a Spanish voice. If none is found, we DON'T touch
+  // utterance.voice at all: lang="en-US" alone lets the browser pick its
+  // default, which is exactly what the old, universally-working version did.
+  const voice = bareVoice ? null : getEnglishVoice();
+  if (voice) {
+    try { utterance.voice = voice; } catch { /* keep browser default */ }
+  }
 
   // Track progress: onboundary fires as the voice crosses words/sentences.
   // We store the absolute char index (offset + event index) so we always
@@ -334,8 +329,19 @@ function launchUtterance(text, startChar, silent) {
       !isSpeaking &&
       !speechSynthesis.speaking &&
       !speechSynthesis.pending;
-    if (stillNothing && currentText === watchdogText) emitState("error");
-  }, 3500);
+    if (!stillNothing || currentText !== watchdogText) return;
+
+    // Recovery: an explicitly-assigned voice can fail silently on some
+    // Chrome/Linux/Windows setups. Retry ONCE with lang-only (no voice
+    // object), which is what the original universally-working version did.
+    // Only after that fails too do we report the error (Brave, no engine).
+    if (!bareVoice) {
+      speechSynthesis.cancel();
+      launchUtterance(text, startChar, silent, true);
+    } else {
+      emitState("error");
+    }
+  }, 2500);
 }
 
 /** Pauses the current reading. */

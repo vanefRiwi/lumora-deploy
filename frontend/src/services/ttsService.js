@@ -177,7 +177,7 @@ export function setOnStateChange(cb) {
  *                                 utterance (used by speed changes, so the
  *                                 UI never flickers back to the play icon)
  */
-export async function speakText(text = "", startChar = 0, { silent = false } = {}) {
+export function speakText(text = "", startChar = 0, { silent = false } = {}) {
   if (!text.trim()) return;
 
   // Browser has no Web Speech API at all: tell the UI instead of failing mute.
@@ -195,11 +195,26 @@ export async function speakText(text = "", startChar = 0, { silent = false } = {
     stopSpeech();
   }
 
-  // Wait for the voice list before speaking. Without this, Android devices
-  // that load voices lazily would start an utterance with no voice available
-  // and produce no sound at all.
-  await waitForVoices();
+  // ⚠️ Chrome requires speak() to run in the SAME synchronous turn as the
+  // user's click. If we `await` first, Chrome drops the "user gesture" and
+  // blocks the voice silently (this broke the Original reading on Chrome).
+  //
+  // So: if voices are already loaded (Chrome, Safari, desktop) we speak
+  // IMMEDIATELY, no await. Only when the list is empty (Android loads it
+  // lazily) do we wait — and there, the click-gesture rule is not enforced.
+  const voicesReady = speechSynthesis.getVoices().length > 0;
+  if (voicesReady) {
+    launchUtterance(text, startChar, silent);
+  } else {
+    waitForVoices().then(() => launchUtterance(text, startChar, silent));
+  }
+}
 
+/**
+ * Builds the utterance and hands it to the engine. Split out from speakText so
+ * it can run synchronously right after the click (see the gesture note above).
+ */
+function launchUtterance(text, startChar, silent) {
   // Remember the full text so we can resume from an offset later.
   currentText = text;
   currentCharIndex = startChar > 0 ? startChar : 0;

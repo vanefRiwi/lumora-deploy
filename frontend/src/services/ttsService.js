@@ -13,18 +13,6 @@ import { marked } from "marked";
 //
 // TTS runs 100% in the browser with the native SpeechSynthesis API:
 // no backend, no API key, no cost. Only `summarizeText` calls the agent.
-//
-// CROSS-BROWSER NOTES (why the extra guards below exist):
-//  · Android loads the voice list asynchronously and often returns an empty
-//    array on the first call, so we wait for it before speaking.
-//  · Privacy browsers (Brave) block the Web Speech API by default as an
-//    anti-fingerprinting measure: speak() succeeds but no sound is produced,
-//    so we detect the silence and report it.
-//  · Safari and iOS never fire `onboundary`, so character progress cannot be
-//    tracked there. We estimate it from elapsed time instead, which keeps a
-//    speed change from restarting the whole passage.
-//  · A device with no English voice pack installed still speaks, using the
-//    system default voice, and the UI warns about the accent.
 // ─────────────────────────────────────────────────────────────
 
 let utterance = null;
@@ -37,24 +25,6 @@ let isSpeaking = false;
 let currentText = "";
 let currentCharIndex = 0;
 
-// Time-based fallback for browsers without `onboundary` (Safari, iOS).
-// We record when the current utterance started and how many characters into
-// the original text it began, so elapsed time can be turned into an offset.
-let speechStartedAt = 0;
-
-// Chrome-on-desktop keep-alive. Chrome silently pauses synthesis after ~15s
-// of continuous speech due to an internal timer bug. A periodic pause/resume
-// resets that timer so long passages read to the end. Harmless on other
-// browsers, so we run it everywhere.
-let keepAliveTimer = null;
-let speechStartOffset = 0;
-let sawBoundaryEvent = false;
-
-// Average characters spoken per second at rate = 1. Empirical: normal English
-// TTS runs at roughly 14-16 chars/s. Only used when onboundary is missing.
-// Tune it if Safari drifts: lower value = resumes earlier in the text.
-const CHARS_PER_SECOND = 15;
-
 // Callbacks the UI can register to update its buttons (play/pause) without
 // having to poll the state.
 let onStateChange = null;
@@ -65,32 +35,15 @@ let onStateChange = null;
 // to pronounce English words, hence the odd accent).
 let englishVoice = null;
 
-/** true if this browser exposes the Web Speech API at all. */
-export function isSpeechSupported() {
-  return typeof window !== "undefined" && "speechSynthesis" in window;
-}
-
 function pickEnglishVoice() {
-  if (!isSpeechSupported()) return null;
   const voices = speechSynthesis.getVoices();
   if (!voices || !voices.length) return null;
 
-  const isEnUS = (v) => /en[-_]US/i.test(v.lang);
-  const isEnAny = (v) => /^en\b|en[-_]/i.test(v.lang);
-
-  // LOCAL voices ONLY. Network voices ("Google US English [net]", etc.) are
-  // BROKEN on desktop Chrome for Windows/Linux: assigning one makes speak()
-  // report speaking=true, never fire onstart, and produce NO audio at all
-  // (verified on the affected machines). Never fall back to them.
-  //
-  // If no local English voice exists we return null on purpose: the caller
-  // then leaves utterance.voice unset and relies on utterance.lang="en-US",
-  // which routes through the OS default synthesis path (SAPI on Windows)
-  // and DOES produce sound.
+  // Prefer a natural US English voice, then any en-US, then any English.
   return (
-    voices.find((v) => isEnUS(v) && v.localService && /natural|samantha|zira|david/i.test(v.name)) ||
-    voices.find((v) => isEnUS(v) && v.localService) ||
-    voices.find((v) => isEnAny(v) && v.localService) ||
+    voices.find((v) => /en[-_]US/i.test(v.lang) && /google|samantha|natural/i.test(v.name)) ||
+    voices.find((v) => /en[-_]US/i.test(v.lang)) ||
+    voices.find((v) => /^en\b|en[-_]/i.test(v.lang)) ||
     null
   );
 }
@@ -101,182 +54,40 @@ function getEnglishVoice() {
   return englishVoice;
 }
 
-/**
- * Waits for the voice list to be populated. On Android the list arrives
- * asynchronously and is often empty on the first call, which is why playback
- * failed silently on some devices: we were creating an utterance before any
- * voice existed. Resolves early once voices arrive, or after `timeout`.
- */
-function waitForVoices(timeout = 2000) {
-  return new Promise((resolve) => {
-    if (!isSpeechSupported()) return resolve([]);
-
-    const existing = speechSynthesis.getVoices();
-    if (existing && existing.length) return resolve(existing);
-
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      englishVoice = pickEnglishVoice();   // refresh the cache
-      resolve(speechSynthesis.getVoices() || []);
-    };
-
-    speechSynthesis.addEventListener("voiceschanged", finish, { once: true });
-    setTimeout(finish, timeout);
-  });
-}
-
 // Voices may not be ready at load time; refresh the cache when they arrive.
-if (isSpeechSupported()) {
+if (typeof speechSynthesis !== "undefined") {
   speechSynthesis.onvoiceschanged = () => { englishVoice = pickEnglishVoice(); };
 }
 
-/**
- * Best guess of how far into `currentText` the voice currently is.
- *
- * Chrome and Firefox report real word boundaries, so we use the exact value.
- * Safari and iOS never fire `onboundary`, so we estimate from elapsed time:
- * without this, changing the speed there restarted the passage from zero.
- */
-function estimatedCharIndex() {
-  if (sawBoundaryEvent) return currentCharIndex;
-  if (!speechStartedAt) return currentCharIndex;
-
-  const elapsedSec = (Date.now() - speechStartedAt) / 1000;
-  const spoken = Math.floor(elapsedSec * CHARS_PER_SECOND * currentRate);
-  const guess = speechStartOffset + spoken;
-
-  // Never run past the end of the text.
-  return Math.min(guess, Math.max(0, currentText.length - 1));
-}
-
-/** Rewinds to the start of the current word so we never clip mid-word. */
-function snapToWordStart(text, index) {
-  if (index <= 0) return 0;
-  const safe = Math.min(index, text.length - 1);
-  const prevSpace = text.lastIndexOf(" ", safe);
-  return prevSpace > 0 ? prevSpace + 1 : 0;
-}
-
 function emitState(state) {
-  // state: "playing" | "paused" | "stopped" | "error" | "unsupported"
-  //      | "no-english-voice"
+  // state: "playing" | "paused" | "stopped"
   if (typeof onStateChange === "function") onStateChange(state);
 }
 
 /**
  * Lets the UI listen to player state changes.
- * @param {(state: "playing"|"paused"|"stopped"|"error"|"unsupported"|"no-english-voice") => void} cb
+ * @param {(state: "playing"|"paused"|"stopped") => void} cb
  */
 export function setOnStateChange(cb) {
   onStateChange = cb;
-}
-
-/**
- * Chrome pauses synthesis after roughly 15 seconds of continuous speech, a
- * long-standing engine bug. Toggling pause/resume every 10s resets its timer
- * so long passages finish. No-op harm on browsers that don't need it.
- */
-function startKeepAlive() {
-  stopKeepAlive();
-  keepAliveTimer = setInterval(() => {
-    if (speechSynthesis.speaking && !speechSynthesis.paused) {
-      speechSynthesis.pause();
-      speechSynthesis.resume();
-    }
-  }, 10000);
-}
-
-function stopKeepAlive() {
-  if (keepAliveTimer) {
-    clearInterval(keepAliveTimer);
-    keepAliveTimer = null;
-  }
 }
 
 // ─── Basic playback ──────────────────────────────────────────
 
 /**
  * Reads plain text aloud. Cancels any previous reading.
- * Async because we may need to wait for the device's voice list.
- *
  * @param {string} text
  * @param {number} [startChar=0]  char offset to start from (used to resume
  *                                after a speed change without restarting)
- * @param {object} [opts]
- * @param {boolean} [opts.silent]  do not emit "stopped" while swapping the
- *                                 utterance (used by speed changes, so the
- *                                 UI never flickers back to the play icon)
  */
-export function speakText(text = "", startChar = 0, { silent = false } = {}) {
+export function speakText(text = "", startChar = 0) {
   if (!text.trim()) return;
 
-  // Browser has no Web Speech API at all: tell the UI instead of failing mute.
-  if (!isSpeechSupported()) {
-    emitState("unsupported");
-    return;
-  }
+  stopSpeech();
 
-  // Cancel whatever is playing. When `silent` we suppress the "stopped"
-  // event: a speed change is a continuation, not a stop.
-  //
-  // ⚠️ Only cancel if something is actually playing or queued. Calling
-  // speechSynthesis.cancel() and then speak() in the same turn when nothing
-  // was playing leaves Chrome in a broken state where the new utterance is
-  // queued but never starts — which is why the Original reading was silent.
-  const busy = speechSynthesis.speaking || speechSynthesis.pending || speechSynthesis.paused;
-
-  // ⚠️ Chrome requires speak() to run in the SAME synchronous turn as the
-  // user's click. If we `await` first, Chrome drops the "user gesture" and
-  // blocks the voice silently (this broke the Original reading on Chrome).
-  //
-  // So: if voices are already loaded (Chrome, Safari, desktop) we speak
-  // IMMEDIATELY, no await. Only when the list is empty (Android loads it
-  // lazily) do we wait — and there, the click-gesture rule is not enforced.
-  const voicesReady = speechSynthesis.getVoices().length > 0;
-
-  const launch = () => {
-    if (voicesReady) {
-      launchUtterance(text, startChar, silent);
-    } else {
-      waitForVoices().then(() => launchUtterance(text, startChar, silent));
-    }
-  };
-
-  if (busy) {
-    // Something was already playing/queued. cancel() + speak() in the SAME
-    // turn is the pattern that leaves Chrome stuck (utterance queued, never
-    // starts) — verified on the affected Windows machine. So cancel now, let
-    // the engine settle for one frame, then speak. The user gesture is not
-    // needed here because audio was already running in this session.
-    if (silent) {
-      speechSynthesis.cancel();
-      isSpeaking = false;
-    } else {
-      stopSpeech();
-    }
-    setTimeout(launch, 250);
-  } else {
-    // Nothing was playing: speak immediately in the same turn as the click so
-    // Chrome keeps the user gesture. No cancel(), so nothing to recover from.
-    launch();
-  }
-}
-
-/**
- * Builds the utterance and hands it to the engine. Split out from speakText so
- * it can run synchronously right after the click (see the gesture note above).
- */
-function launchUtterance(text, startChar, silent) {
   // Remember the full text so we can resume from an offset later.
   currentText = text;
   currentCharIndex = startChar > 0 ? startChar : 0;
-
-  // Reset the time-based tracking for this utterance.
-  speechStartOffset = currentCharIndex;
-  speechStartedAt = 0;
-  sawBoundaryEvent = false;
 
   // If we are resuming from an offset, only speak the remaining slice.
   const toSpeak = startChar > 0 ? text.slice(startChar) : text;
@@ -285,152 +96,35 @@ function launchUtterance(text, startChar, silent) {
   utterance.rate = currentRate;
   utterance.lang = "en-US";
 
-  // Assign a LOCAL English voice when one exists (Mac: Samantha, some Windows
-  // installs: Microsoft Zira/David). When none exists we deliberately leave
-  // utterance.voice UNSET: utterance.lang = "en-US" alone makes the browser
-  // use its OS default synthesis path, which works on Chrome/Windows where
-  // the only listed English voices are the broken Google network ones.
+  // Force an actual English voice. Setting lang alone is not enough: the
+  // browser still uses the system default voice unless we assign one, which
+  // is why a Spanish system voice was reading the English text.
   const voice = getEnglishVoice();
   if (voice) utterance.voice = voice;
 
   // Track progress: onboundary fires as the voice crosses words/sentences.
   // We store the absolute char index (offset + event index) so we always
-  // know how far into the ORIGINAL text we are. Safari never fires this.
+  // know how far into the ORIGINAL text we are.
   utterance.onboundary = (e) => {
     if (typeof e.charIndex === "number") {
-      sawBoundaryEvent = true;
       currentCharIndex = startChar + e.charIndex;
     }
   };
 
-  // Per-utterance flag the watchdog trusts. Some engines (this Windows box)
-  // take several seconds to fire onstart for the OS default English voice.
-  // The watchdog must NOT declare failure just because onstart is slow, only
-  // if it TRULY never fires — so onstart flips this and the watchdog checks it.
-  let started = false;
-
-  utterance.onstart = () => {
-    started = true;
-    isSpeaking = true;
-    speechStartedAt = Date.now();   // baseline for the time estimate
-    startKeepAlive();               // prevent Chrome's ~15s auto-pause
-    emitState("playing");
-  };
-
-  utterance.onend = () => {
+  utterance.onstart = () => { isSpeaking = true; emitState("playing"); };
+  utterance.onend   = () => {
     isSpeaking = false;
     currentCharIndex = 0;   // finished: reset progress
-    speechStartedAt = 0;
-    stopKeepAlive();
     emitState("stopped");
   };
-
-  utterance.onerror = (e) => {
-    isSpeaking = false;
-    speechStartedAt = 0;
-    stopKeepAlive();
-    // "interrupted" and "canceled" happen whenever WE stop on purpose
-    // (new reading, speed change, closing the bar): not real failures.
-    if (e?.error && !["interrupted", "canceled"].includes(e.error)) {
-      emitState("error");
-    } else if (!silent) {
-      emitState("stopped");
-    }
-  };
+  utterance.onerror = () => { isSpeaking = false; emitState("stopped"); };
 
   speechSynthesis.speak(utterance);
-
-  // Warn ONLY when the device truly has no English voice of any kind
-  // (e.g. Android without the English TTS pack). Skipping a broken network
-  // voice is NOT that case: the lang="en-US" fallback still speaks English.
-  const hasAnyEnglish = speechSynthesis
-    .getVoices()
-    .some((v) => /^en\b|en[-_]/i.test(v.lang));
-  if (!voice && !hasAnyEnglish) emitState("no-english-voice");
-
-  // Watchdog: catches the case where the engine accepts speak() but audio
-  // NEVER starts and no onerror fires (Brave blocks the API outright).
-  //
-  // Crucially, it keys off the per-utterance `started` flag set by onstart,
-  // NOT off speechSynthesis.speaking. On this Windows machine the default
-  // English voice can take a few seconds to fire onstart, and the old
-  // watchdog was cancelling that perfectly good reading as a false "zombie".
-  // If onstart fired at all, there is nothing wrong — we bail out.
-  //
-  // Window widened to 6s to comfortably clear slow OS-default voice startup.
-  const watchdogText = currentText;
-  setTimeout(() => {
-    if (started) return;                        // onstart fired: all good
-    if (currentText !== watchdogText) return;   // a newer reading took over
-    if (speechSynthesis.paused) return;         // user paused before it began
-
-    // onstart never fired AND this is still the current reading: genuine
-    // silent failure. Distinguish a fully blocked engine from a stuck one
-    // only for the log; the recovery is the same.
-    const reason = speechSynthesis.speaking ? "zombie-voice" : "engine-blocked";
-    handleSilentFailure(reason);
-  }, 6000);
-}
-
-/**
- * A reading was accepted by the engine but no audio ever started.
- * We tell the UI, and we also try to SAY the reason out loud through the
- * OS-default path (a bare utterance with NO voice assigned), because that
- * path keeps working even when the listed voices are broken. If even that
- * stays silent (e.g. Brave blocking the whole API), only the UI message
- * remains — there is nothing left that can produce sound.
- *
- * @param {"zombie-voice"|"engine-blocked"} reason
- */
-function handleSilentFailure(reason) {
-  stopKeepAlive();
-  speechSynthesis.cancel();   // clear the stuck utterance
-  isSpeaking = false;
-  emitState("error");
-
-  const message =
-    reason === "zombie-voice"
-      ? "LumiVoice no pudo usar la voz seleccionada. Las voces de red de este navegador están dañadas, así que estoy usando la voz por defecto del sistema. Vuelve a presionar el botón para escuchar la lección."
-      : "LumiVoice no pudo reproducir audio. Es posible que este navegador bloquee la síntesis de voz. Revisa los permisos de sonido o prueba en otro navegador.";
-
-  console.warn(`[LumiVoice] Silent failure (${reason}): ${message}`);
-
-  // Bare utterance: NO voice assigned, system default path. This is the same
-  // configuration that was verified to work on the affected Chrome/Windows
-  // machine when every listed voice failed.
-  // We already called speechSynthesis.cancel() above. Calling speak() in the
-  // SAME turn right after cancel() is exactly the pattern that leaves Chrome
-  // stuck (utterance queued, never starts) — confirmed on the affected
-  // machine. Since we are already inside a setTimeout (no user gesture to
-  // preserve), give the engine a short breath before speaking the message.
-  setTimeout(() => {
-    try {
-      const diag = new SpeechSynthesisUtterance(message);
-      diag.lang = "es-ES";
-      diag.volume = 1;
-      diag.rate = 1;
-      speechSynthesis.speak(diag);
-    } catch {
-      /* nothing else can be done audibly */
-    }
-  }, 250);
-
-  // If the failure was the broken network voice, stop trusting the cached
-  // voice for the rest of the session: next readings go straight through the
-  // working default path.
-  if (reason === "zombie-voice") englishVoice = null;
 }
 
 /** Pauses the current reading. */
 export function pauseSpeech() {
-  if (!isSpeechSupported()) return;
   if (speechSynthesis.speaking && !speechSynthesis.paused) {
-    // Freeze the time estimate at the current position before pausing,
-    // otherwise the elapsed clock keeps running while the voice is silent.
-    currentCharIndex = estimatedCharIndex();
-    speechStartOffset = currentCharIndex;
-    speechStartedAt = 0;
-
     speechSynthesis.pause();
     emitState("paused");
   }
@@ -438,9 +132,7 @@ export function pauseSpeech() {
 
 /** Resumes a paused reading. */
 export function resumeSpeech() {
-  if (!isSpeechSupported()) return;
   if (speechSynthesis.paused) {
-    speechStartedAt = Date.now();   // restart the estimate clock
     speechSynthesis.resume();
     emitState("playing");
   }
@@ -448,11 +140,8 @@ export function resumeSpeech() {
 
 /** Fully stops any reading. */
 export function stopSpeech() {
-  if (!isSpeechSupported()) return;
-  stopKeepAlive();
   speechSynthesis.cancel();
   isSpeaking = false;
-  speechStartedAt = 0;
   emitState("stopped");
 }
 
@@ -463,67 +152,36 @@ export function restartSpeech() {
 }
 
 /**
- * Changes the reading speed. Supported: 0.75, 1, 1.25.
+ * Changes the reading speed. Supported: 0.75, 1, 1.5.
  *
  * IMPORTANT: the Web Speech API cannot change the rate of an utterance that
- * is already playing; the spec does not allow it. The only way to apply a new
- * speed is to cancel and speak again. To avoid restarting from the top we
- * resume from the current position:
- *
- *   · Chrome / Firefox → exact position from `onboundary`.
- *   · Safari / iOS     → estimated from elapsed time (no boundary events).
- *
- * The swap is done in `silent` mode so the UI never flickers back to the
- * play icon mid-reading.
+ * is already playing. To apply the new speed WITHOUT restarting from the
+ * top, we continue reading from the last word boundary we tracked. The
+ * result is a near-seamless speed change from roughly the current position.
  *
  * @param {number} rate
  */
 export function setSpeechRate(rate = 1) {
-  const previousRate = currentRate;
-
-  if (!isSpeechSupported()) { currentRate = rate; return; }
-
-  const wasSpeaking = speechSynthesis.speaking;
-  const wasPaused = speechSynthesis.paused;
-
-  // Compute the position BEFORE changing the rate: the time estimate depends
-  // on the speed that was actually in use up to this moment.
-  let resumeAt = 0;
-  if ((wasSpeaking || wasPaused) && currentText) {
-    currentRate = previousRate;              // ensure the estimate uses the old rate
-    resumeAt = snapToWordStart(currentText, estimatedCharIndex());
-  }
-
   currentRate = rate;
 
-  // Nothing playing: the new rate simply applies to the next reading.
-  if (!wasSpeaking && !wasPaused) return;
-  if (!currentText) return;
-
-  // Re-speak from where we are, silently, so the new rate takes effect from
-  // the current position instead of the start.
-  speakText(currentText, resumeAt, { silent: true });
-
-  // If the user changed speed while PAUSED, keep it paused at the new rate
-  // rather than surprising them with audio starting on its own.
-  if (wasPaused) {
-    setTimeout(() => {
-      if (speechSynthesis.speaking && !speechSynthesis.paused) {
-        speechSynthesis.pause();
-        emitState("paused");
-      }
-    }, 60);
+  // If something is playing (or paused), re-speak from where we are so the
+  // new rate takes effect from the current position, not from the start.
+  const wasPlaying = speechSynthesis.speaking || speechSynthesis.paused;
+  if (wasPlaying && currentText) {
+    // Back up a couple of chars so we do not clip mid-word.
+    const resumeAt = Math.max(0, currentCharIndex);
+    speakText(currentText, resumeAt);
   }
 }
 
 /** true if a reading is in progress (even if paused). */
 export function isSpeechPlaying() {
-  return isSpeechSupported() && speechSynthesis.speaking;
+  return speechSynthesis.speaking;
 }
 
 /** true if the reading is paused. */
 export function isSpeechPaused() {
-  return isSpeechSupported() && speechSynthesis.paused;
+  return speechSynthesis.paused;
 }
 
 // ─── Markdown → readable text ────────────────────────────────
@@ -636,12 +294,6 @@ export function hasApiKey() {
 }
 
 // ─── AI Summarization (via agent/) ───────────────────────────
-//
-// NOTE: this is completely independent of the speech engine. It is a plain
-// HTTP request, so it works on every browser and device even when the voice
-// itself does not. That is why "Summarize with AI" appeared to work on
-// devices where nothing was ever heard: the summary arrived fine, and only
-// the reading step failed.
 
 /**
  * Sends the lesson text to the agent, which asks the AI model for a short

@@ -15,78 +15,15 @@ import { marked } from "marked";
 // no backend, no API key, no cost. Only `summarizeText` calls the agent.
 // ─────────────────────────────────────────────────────────────
 
-// ─── Why chunked playback ───────────────────────────────────────
-// speechSynthesis.pause()/resume() are unreliable in Chromium-based
-// browsers (Edge, Chrome), especially with "Online (Natural)" voices:
-// pause() is sometimes a silent no-op (speech keeps going) and resume()
-// can report "playing" while producing no audio at all. This is a
-// long-standing browser bug, not something we can detect-and-patch
-// reliably from JS.
-//
-// The fix is to stop depending on pause()/resume() entirely and only use
-// speak() and cancel(), which ARE reliable everywhere. We split the text
-// into sentence-sized chunks and speak them one at a time:
-//   - "pause"  = cancel() the chunk currently playing, remember its index
-//   - "resume"/"play" = speak() that same chunk again
-// The tradeoff is that resuming replays the current sentence from its
-// start rather than the exact word — a small price for pause that
-// actually works on every browser.
-
 let utterance = null;
 let currentRate = 1;
-let isSpeaking = false; // a chunk is actively being spoken right now
-let isPaused = false;   // we are deliberately paused between chunks
+let isSpeaking = false;
 
-// Full text being read, split into sentence-sized pieces, and which one
-// we are currently on / about to resume from.
+// Text currently being read, and how far we have progressed (char index).
+// We track the boundary so a speed change can resume from roughly where the
+// voice was, instead of restarting the whole passage from the beginning.
 let currentText = "";
-let chunks = [];
-let chunkIndex = 0;
-
-/**
- * Splits text into sentence-ish chunks so we can play/pause between them.
- * Falls back to the whole text as a single chunk if no sentence breaks
- * are found (e.g. a single long clause with no punctuation).
- *
- * Chunks are also capped at MAX_CHUNK_CHARS: Chromium-based browsers
- * (Edge/Chrome) have a long-standing bug where a single utterance that
- * runs past ~15 seconds of audio can go silent without ever firing
- * `onend`/`onerror` — our engine would then wait forever for an event
- * that never comes, which looks exactly like "it worked a few times then
- * stopped". Keeping chunks short keeps every utterance well under that
- * window, even at the slowest (0.75×) reading speed.
- */
-const MAX_CHUNK_CHARS = 180;
-
-function splitIntoChunks(text) {
-  const sentences = (text.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g) || [text])
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const pieces = [];
-  for (const sentence of sentences) {
-    if (sentence.length <= MAX_CHUNK_CHARS) {
-      pieces.push(sentence);
-      continue;
-    }
-    // Long sentence (no punctuation to break on) — split further at
-    // word boundaries so no single utterance exceeds the safe length.
-    const words = sentence.split(/\s+/);
-    let buf = "";
-    for (const word of words) {
-      const next = buf ? `${buf} ${word}` : word;
-      if (next.length > MAX_CHUNK_CHARS && buf) {
-        pieces.push(buf);
-        buf = word;
-      } else {
-        buf = next;
-      }
-    }
-    if (buf) pieces.push(buf);
-  }
-
-  return pieces.length ? pieces : [text.trim()];
-}
+let currentCharIndex = 0;
 
 // Callbacks the UI can register to update its buttons (play/pause) without
 // having to poll the state.
@@ -137,83 +74,25 @@ export function setOnStateChange(cb) {
 
 // ─── Basic playback ──────────────────────────────────────────
 
-// Chaining cancel() immediately followed by speak() — which is exactly
-// what pause→play and speed changes do — can desync Chromium's internal
-// speech queue if repeated enough times in a session (a known Chrome/Edge
-// issue). A short delay between the two lets the engine actually flush
-// the cancellation before we ask it to speak again.
-const RESTART_DELAY_MS = 80;
-
-// If an utterance never reports onstart within this window, the engine
-// has likely gone silently stuck (the Chromium "goes mute" bug). We
-// recover by cancelling and giving it one retry instead of hanging
-// forever with a UI that looks paused/broken.
-const START_WATCHDOG_MS = 3000;
-let startWatchdogTimer = null;
-
-function clearStartWatchdog() {
-  if (startWatchdogTimer) {
-    clearTimeout(startWatchdogTimer);
-    startWatchdogTimer = null;
-  }
-}
-
-// How far into the CURRENT chunk we've actually gotten, in characters.
-// Updated live via onboundary while speaking, and used by pauseSpeech to
-// know exactly where to resume — so Play continues instead of repeating
-// the whole sentence. Reset to 0 whenever a chunk starts fresh.
-let chunkResumeOffset = 0;
-
-// Whether onboundary has fired at least once for the utterance currently
-// playing. Some voices (notably Edge's "Online/Natural" ones) never fire
-// it at all, in which case we have no word-level position to resume from.
-let currentChunkBoundaryFired = false;
-
-// Where resumeSpeech() should continue from, decided by pauseSpeech():
-// either the exact spot in the current chunk (boundary info available) or
-// the start of the next chunk (no boundary info — skip rather than repeat).
-let pausedTargetIndex = 0;
-let pausedTargetOffset = 0;
-
 /**
- * Speaks a single chunk by index. Recursively moves on to the next chunk
- * on natural completion, unless we've been paused/stopped in the meantime.
- * @param {number} index
- * @param {object} [opts]
- * @param {boolean} [opts.isRetry=false]     internal flag, one retry allowed
- * @param {number}  [opts.resumeOffset=0]    char offset into chunks[index]
- *                                           to resume from (skips the part
- *                                           already spoken before pausing)
+ * Reads plain text aloud. Cancels any previous reading.
+ * @param {string} text
+ * @param {number} [startChar=0]  char offset to start from (used to resume
+ *                                after a speed change without restarting)
  */
-function playChunk(index, { isRetry = false, resumeOffset = 0 } = {}) {
-  clearStartWatchdog();
+export function speakText(text = "", startChar = 0) {
+  if (!text.trim()) return;
 
-  if (index < 0 || index >= chunks.length) {
-    // Reached the end of the text.
-    isSpeaking = false;
-    isPaused = false;
-    chunkIndex = 0;
-    chunkResumeOffset = 0;
-    emitState("stopped");
-    return;
-  }
+  stopSpeech();
 
-  const fullChunk = chunks[index];
-  const textToSpeak = resumeOffset > 0 ? fullChunk.slice(resumeOffset).trim() : fullChunk;
+  // Remember the full text so we can resume from an offset later.
+  currentText = text;
+  currentCharIndex = startChar > 0 ? startChar : 0;
 
-  // Nothing meaningful left in this chunk (we paused right at its end) —
-  // move straight on to the next one instead of speaking an empty/near-
-  // empty utterance.
-  if (!textToSpeak) {
-    playChunk(index + 1);
-    return;
-  }
+  // If we are resuming from an offset, only speak the remaining slice.
+  const toSpeak = startChar > 0 ? text.slice(startChar) : text;
 
-  chunkIndex = index;
-  chunkResumeOffset = resumeOffset;
-  currentChunkBoundaryFired = false;
-
-  utterance = new SpeechSynthesisUtterance(textToSpeak);
+  utterance = new SpeechSynthesisUtterance(toSpeak);
   utterance.rate = currentRate;
   utterance.lang = "en-US";
 
@@ -223,127 +102,46 @@ function playChunk(index, { isRetry = false, resumeOffset = 0 } = {}) {
   const voice = getEnglishVoice();
   if (voice) utterance.voice = voice;
 
-  utterance.onstart = () => {
-    clearStartWatchdog();
-    isSpeaking = true;
-    emitState("playing");
-  };
-
-  // Tracks progress WITHIN this chunk as the voice crosses word/sentence
-  // boundaries. resumeOffset is the base (how much of the chunk we'd
-  // already skipped to get here), so this always holds the absolute
-  // position inside the original chunk text.
+  // Track progress: onboundary fires as the voice crosses words/sentences.
+  // We store the absolute char index (offset + event index) so we always
+  // know how far into the ORIGINAL text we are.
   utterance.onboundary = (e) => {
-    currentChunkBoundaryFired = true;
     if (typeof e.charIndex === "number") {
-      chunkResumeOffset = resumeOffset + e.charIndex;
+      currentCharIndex = startChar + e.charIndex;
     }
   };
 
-  utterance.onend = () => {
-    clearStartWatchdog();
+  utterance.onstart = () => { isSpeaking = true; emitState("playing"); };
+  utterance.onend   = () => {
     isSpeaking = false;
-    chunkResumeOffset = 0; // this chunk finished fully
-    // Only auto-advance if this ending was natural (not us pausing/
-    // stopping, which also triggers onend via cancel()).
-    if (!isPaused) setTimeout(() => playChunk(chunkIndex + 1), RESTART_DELAY_MS);
-  };
-
-  utterance.onerror = (e) => {
-    clearStartWatchdog();
-    isSpeaking = false;
-    // cancel() fires onerror with error "interrupted"/"canceled" — that's
-    // an intentional pause/stop, not a real failure, so stay quiet.
-    if (isPaused || e.error === "interrupted" || e.error === "canceled") return;
+    currentCharIndex = 0;   // finished: reset progress
     emitState("stopped");
   };
+  utterance.onerror = () => { isSpeaking = false; emitState("stopped"); };
 
   speechSynthesis.speak(utterance);
-
-  // Watchdog: if this chunk never actually starts, the engine is stuck.
-  startWatchdogTimer = setTimeout(() => {
-    if (isPaused) return; // user paused while we were waiting — fine
-    speechSynthesis.cancel();
-    if (!isRetry) {
-      // One retry: often enough to shake the engine loose.
-      playChunk(index, { isRetry: true, resumeOffset });
-    } else {
-      // Retried and still nothing — give up on this chunk rather than
-      // hang forever, and continue with the next one.
-      playChunk(index + 1);
-    }
-  }, START_WATCHDOG_MS);
 }
 
-/**
- * Reads plain text aloud. Cancels any previous reading.
- * @param {string} text
- * @param {number} [startChunk=0]  chunk index to start from (used to
- *                                 resume after pause/speed change)
- */
-export function speakText(text = "", startChunk = 0) {
-  if (!text.trim()) return;
-
-  speechSynthesis.cancel();
-  isPaused = false;
-  chunkResumeOffset = 0;
-
-  currentText = text;
-  chunks = splitIntoChunks(text);
-  setTimeout(() => playChunk(startChunk), RESTART_DELAY_MS);
-}
-
-/**
- * Pauses the current reading.
- *
- * We never call the native speechSynthesis.pause() — it is unreliable in
- * Chromium-based browsers (Edge/Chrome), particularly with "Online
- * (Natural)" voices, where it can silently do nothing or leave resume()
- * producing no audio. Instead we cancel() the sentence currently playing
- * (reliable everywhere) and remember its index so Play can pick it back
- * up from the start of that same sentence.
- */
+/** Pauses the current reading. */
 export function pauseSpeech() {
-  if (!isSpeaking || isPaused) return;
-  clearStartWatchdog();
-  isPaused = true;
-  isSpeaking = false;
-
-  if (currentChunkBoundaryFired) {
-    // We know exactly where we got to in this sentence — resume there.
-    pausedTargetIndex = chunkIndex;
-    pausedTargetOffset = chunkResumeOffset;
-  } else {
-    // This voice never reported word-level progress (common with Edge's
-    // "Online/Natural" voices), so we have no idea where mid-sentence we
-    // stopped. Repeating the sentence from its start would sound like a
-    // stutter, so instead we pick up with the NEXT sentence — nothing is
-    // ever repeated, at the cost of skipping the tail of this one.
-    pausedTargetIndex = chunkIndex + 1;
-    pausedTargetOffset = 0;
+  if (speechSynthesis.speaking && !speechSynthesis.paused) {
+    speechSynthesis.pause();
+    emitState("paused");
   }
-
-  speechSynthesis.cancel();
-  emitState("paused");
 }
 
-/** Resumes a paused reading from wherever pauseSpeech determined we should. */
+/** Resumes a paused reading. */
 export function resumeSpeech() {
-  if (!isPaused) return;
-  isPaused = false;
-  setTimeout(
-    () => playChunk(pausedTargetIndex, { resumeOffset: pausedTargetOffset }),
-    RESTART_DELAY_MS
-  );
+  if (speechSynthesis.paused) {
+    speechSynthesis.resume();
+    emitState("playing");
+  }
 }
 
 /** Fully stops any reading. */
 export function stopSpeech() {
-  clearStartWatchdog();
-  isPaused = false;
   speechSynthesis.cancel();
   isSpeaking = false;
-  chunkIndex = 0;
   emitState("stopped");
 }
 
@@ -354,38 +152,36 @@ export function restartSpeech() {
 }
 
 /**
- * Changes the reading speed. Supported: 0.75, 1, 1.25.
+ * Changes the reading speed. Supported: 0.75, 1, 1.5.
  *
- * The Web Speech API cannot change the rate of an utterance already
- * playing, so we re-speak the current sentence at the new rate. Since we
- * only ever resume at sentence granularity, this is seamless in practice.
+ * IMPORTANT: the Web Speech API cannot change the rate of an utterance that
+ * is already playing. To apply the new speed WITHOUT restarting from the
+ * top, we continue reading from the last word boundary we tracked. The
+ * result is a near-seamless speed change from roughly the current position.
  *
  * @param {number} rate
  */
 export function setSpeechRate(rate = 1) {
   currentRate = rate;
 
-  if ((isSpeaking || isPaused) && chunks.length) {
-    clearStartWatchdog();
-    // Reuse whichever position we already know about: if we were paused,
-    // pauseSpeech() already decided the right resume point; if we were
-    // actively speaking, use the live position tracked via onboundary.
-    const targetIndex = isPaused ? pausedTargetIndex : chunkIndex;
-    const targetOffset = isPaused ? pausedTargetOffset : chunkResumeOffset;
-    isPaused = false;
-    speechSynthesis.cancel();
-    setTimeout(() => playChunk(targetIndex, { resumeOffset: targetOffset }), RESTART_DELAY_MS);
+  // If something is playing (or paused), re-speak from where we are so the
+  // new rate takes effect from the current position, not from the start.
+  const wasPlaying = speechSynthesis.speaking || speechSynthesis.paused;
+  if (wasPlaying && currentText) {
+    // Back up a couple of chars so we do not clip mid-word.
+    const resumeAt = Math.max(0, currentCharIndex);
+    speakText(currentText, resumeAt);
   }
 }
 
 /** true if a reading is in progress (even if paused). */
 export function isSpeechPlaying() {
-  return isSpeaking || isPaused;
+  return speechSynthesis.speaking;
 }
 
 /** true if the reading is paused. */
 export function isSpeechPaused() {
-  return isPaused;
+  return speechSynthesis.paused;
 }
 
 // ─── Markdown → readable text ────────────────────────────────

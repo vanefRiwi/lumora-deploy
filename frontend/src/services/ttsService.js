@@ -84,6 +84,7 @@ export function speakText(text = "", startChar = 0) {
   if (!text.trim()) return;
 
   stopSpeech();
+  manualPauseActive = false;
 
   // Remember the full text so we can resume from an offset later.
   currentText = text;
@@ -122,19 +123,72 @@ export function speakText(text = "", startChar = 0) {
   speechSynthesis.speak(utterance);
 }
 
-/** Pauses the current reading. */
+// How long we give the browser's native pause()/resume() to prove it
+// actually worked before we fall back to a manual pause.
+const PAUSE_CHECK_MS = 250;
+
+// True once we detect the native pause() failed on this session and we
+// had to simulate it by cancelling. Lets resumeSpeech() know it must
+// restart the utterance instead of calling the native resume().
+let manualPauseActive = false;
+
+/**
+ * Pauses the current reading.
+ *
+ * IMPORTANT (Edge/Chrome quirk): speechSynthesis.pause() is unreliable with
+ * some voices — most notably the "Online (Natural)" voices Edge offers,
+ * which is exactly the kind of voice pickEnglishVoice() prefers for
+ * quality. With those voices, pause() is silently ignored (speech keeps
+ * going) instead of actually pausing.
+ *
+ * To work around this we call the native pause() and then verify shortly
+ * after whether it actually took effect. If speech is still running, we
+ * simulate a pause manually: cancel the utterance but keep currentText /
+ * currentCharIndex so resumeSpeech() can continue from the same spot.
+ */
 export function pauseSpeech() {
-  if (speechSynthesis.speaking && !speechSynthesis.paused) {
-    speechSynthesis.pause();
-    emitState("paused");
-  }
+  if (!speechSynthesis.speaking || speechSynthesis.paused) return;
+
+  speechSynthesis.pause();
+  emitState("paused");
+
+  setTimeout(() => {
+    // Native pause() did not actually pause anything -> fake it.
+    if (speechSynthesis.speaking && !speechSynthesis.paused) {
+      manualPauseActive = true;
+      speechSynthesis.cancel(); // stops audio; onend will fire but currentCharIndex is preserved
+      isSpeaking = false;
+      emitState("paused");
+    }
+  }, PAUSE_CHECK_MS);
 }
 
-/** Resumes a paused reading. */
+/**
+ * Resumes a paused reading.
+ *
+ * If the previous pause was a real native pause, we just call resume().
+ * If it was a simulated ("manual") pause because the browser ignored
+ * pause(), there is nothing to resume — we re-speak the remaining text
+ * from currentCharIndex instead, which is invisible to the user.
+ */
 export function resumeSpeech() {
+  if (manualPauseActive) {
+    manualPauseActive = false;
+    speakText(currentText, currentCharIndex);
+    return;
+  }
+
   if (speechSynthesis.paused) {
     speechSynthesis.resume();
     emitState("playing");
+
+    // Some Edge builds also lie about resume(): they report "playing" but
+    // never actually produce sound again. Double check and recover.
+    setTimeout(() => {
+      if (!speechSynthesis.speaking) {
+        speakText(currentText, currentCharIndex);
+      }
+    }, PAUSE_CHECK_MS);
   }
 }
 
@@ -142,6 +196,7 @@ export function resumeSpeech() {
 export function stopSpeech() {
   speechSynthesis.cancel();
   isSpeaking = false;
+  manualPauseActive = false;
   emitState("stopped");
 }
 

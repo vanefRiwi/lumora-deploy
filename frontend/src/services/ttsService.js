@@ -303,7 +303,14 @@ function launchUtterance(text, startChar, silent) {
     }
   };
 
+  // Per-utterance flag the watchdog trusts. Some engines (this Windows box)
+  // take several seconds to fire onstart for the OS default English voice.
+  // The watchdog must NOT declare failure just because onstart is slow, only
+  // if it TRULY never fires — so onstart flips this and the watchdog checks it.
+  let started = false;
+
   utterance.onstart = () => {
+    started = true;
     isSpeaking = true;
     speechStartedAt = Date.now();   // baseline for the time estimate
     startKeepAlive();               // prevent Chrome's ~15s auto-pause
@@ -341,28 +348,28 @@ function launchUtterance(text, startChar, silent) {
     .some((v) => /^en\b|en[-_]/i.test(v.lang));
   if (!voice && !hasAnyEnglish) emitState("no-english-voice");
 
-  // Watchdog: some engines accept speak() but never produce sound nor fire
-  // onerror (Brave blocks the API; a stuck engine reports speaking=true with
-  // no onstart). If nothing REALLY started, self-diagnose and, when possible,
-  // explain the problem OUT LOUD using the safest path available.
+  // Watchdog: catches the case where the engine accepts speak() but audio
+  // NEVER starts and no onerror fires (Brave blocks the API outright).
+  //
+  // Crucially, it keys off the per-utterance `started` flag set by onstart,
+  // NOT off speechSynthesis.speaking. On this Windows machine the default
+  // English voice can take a few seconds to fire onstart, and the old
+  // watchdog was cancelling that perfectly good reading as a false "zombie".
+  // If onstart fired at all, there is nothing wrong — we bail out.
+  //
+  // Window widened to 6s to comfortably clear slow OS-default voice startup.
   const watchdogText = currentText;
   setTimeout(() => {
+    if (started) return;                        // onstart fired: all good
     if (currentText !== watchdogText) return;   // a newer reading took over
+    if (speechSynthesis.paused) return;         // user paused before it began
 
-    // Case A: engine did nothing at all (no speaking, no pending).
-    const didNothing =
-      !isSpeaking && !speechSynthesis.speaking && !speechSynthesis.pending;
-
-    // Case B: zombie state — engine claims to be speaking but onstart never
-    // fired. This is exactly the broken-network-voice signature on
-    // Chrome/Windows: speaking=true, paused=false, pending=false, no audio.
-    const zombie =
-      !isSpeaking && speechSynthesis.speaking && !speechSynthesis.paused;
-
-    if (didNothing || zombie) {
-      handleSilentFailure(zombie ? "zombie-voice" : "engine-blocked");
-    }
-  }, 3500);
+    // onstart never fired AND this is still the current reading: genuine
+    // silent failure. Distinguish a fully blocked engine from a stuck one
+    // only for the log; the recovery is the same.
+    const reason = speechSynthesis.speaking ? "zombie-voice" : "engine-blocked";
+    handleSilentFailure(reason);
+  }, 6000);
 }
 
 /**

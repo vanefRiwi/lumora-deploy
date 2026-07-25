@@ -20,13 +20,15 @@ import {
   summarizeText, setApiKey, getApiKey, hasApiKey,
 } from "../services/ttsService.js";
 
+// Chrome and Safari interpret `rate` differently and 1.5 sounded rushed on
+// Chrome, so the ceiling is 1.25.
 const RATES = [0.75, 1, 1.25];
 
 const icon = {
   play:  `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>`,
   pause: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`,
-  // Restart: a circle with an arrow.
-  restart:`<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3"/><polygon points="3 4 3 10 9 10" fill="currentColor" stroke="none"/></svg>`,
+  // Restart: counter-clockwise circular arrow.
+  restart:`<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/></svg>`,
   close: `<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>`,
   doc:   `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>`,
   spark: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.5 5.5L19 9l-5.5 1.5L12 16l-1.5-5.5L5 9l5.5-1.5z"/></svg>`,
@@ -172,7 +174,7 @@ function template() {
           ${loading ? icon.loader : (playing && !paused ? icon.pause : icon.play)}
         </button>
 
-        <!-- Restart button (square inside a circle) -->
+        <!-- Restart button -->
         <button class="js-va-restart w-9 h-9 sm:w-11 sm:h-11 rounded-full flex items-center justify-center shrink-0 cursor-pointer transition-transform hover:scale-105"
                 style="background: #fff; color: var(--primary); border: 1.5px solid var(--primary)"
                 title="Restart from the beginning">
@@ -180,8 +182,8 @@ function template() {
         </button>
 
         <div class="flex-1 min-w-0">
-           <p class="text-sm font-bold leading-tight" style="color: var(--primary); font-family: var(--font-family-display)">
-            LumiVoice <span class="hidden sm:inline font-normal" style="color: var(--muted-foreground)">· Listen to this section</span>
+          <p class="text-sm font-bold leading-tight" style="color: var(--primary); font-family: var(--font-family-display)">
+            LumiVoice
           </p>
           <p class="text-sm truncate" style="color: var(--muted-foreground)">${title}</p>
         </div>
@@ -292,8 +294,8 @@ function attach(root) {
     startAI();
   });
 
-  // Speed. Changing the rate now resumes from the current position instead
-  // of restarting the audio (handled inside setSpeechRate in the service).
+  // Speed. The service resumes from the current position instead of
+  // restarting the audio, so the change is seamless on every browser.
   root.querySelectorAll(".js-rate").forEach((btn) =>
     btn.addEventListener("click", () => {
       _rate = Number(btn.dataset.rate);
@@ -345,13 +347,19 @@ async function startAI() {
   }
 }
 
-// Brief notice when there is nothing to read
-function flashEmpty() {
+// Brief notice shown in the title line. Reused for empty content, blocked
+// speech engines and missing voice packs.
+function flashMessage(msg, ms = 3000) {
   const p = hostEl().querySelector(".js-va-panel p.truncate");
   if (!p) return;
   const prev = p.textContent;
-  p.textContent = "Nothing to read on this screen.";
-  setTimeout(() => { if (p) p.textContent = prev; }, 1800);
+  p.textContent = msg;
+  setTimeout(() => { if (p) p.textContent = prev; }, ms);
+}
+
+// Brief notice when there is nothing to read
+function flashEmpty() {
+  flashMessage("Nothing to read on this screen.", 1800);
 }
 
 // ─── Public API (used by the navbar) ──────────────────────────────────────────
@@ -368,6 +376,25 @@ export function openVoiceAssistant() {
 
   // The bar reacts to the service state changes
   setOnStateChange((state) => {
+    // The browser blocks or lacks the Web Speech API. Brave blocks it by
+    // default as an anti-fingerprinting measure, and some devices have no
+    // speech engine at all: without this the play button just did nothing.
+    if (state === "unsupported" || state === "error") {
+      playing = false; paused = false; loading = false;
+      if (mounted) {
+        render();
+        flashMessage("Voice not available in this browser. Try Chrome or Safari.");
+      }
+      return;
+    }
+
+    // Speech works, but the device has no English voice installed, so the
+    // text is read with the system default voice and a foreign accent.
+    if (state === "no-english-voice") {
+      if (mounted) flashMessage("No English voice installed on this device.");
+      return;
+    }
+
     playing = state === "playing" || state === "paused";
     paused  = state === "paused";
     if (state === "stopped") { playing = false; paused = false; }

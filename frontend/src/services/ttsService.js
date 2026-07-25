@@ -69,11 +69,18 @@ function pickEnglishVoice() {
   const voices = speechSynthesis.getVoices();
   if (!voices || !voices.length) return null;
 
-  // Prefer a natural US English voice, then any en-US, then any English.
+  // Prefer a LOCAL en-US voice: it starts instantly and needs no network.
+  // Network voices (many "Google" ones) stream their audio and can take a
+  // couple of seconds to begin on Chrome/Windows, which looked like a failure.
+  const isEnUS = (v) => /en[-_]US/i.test(v.lang);
+  const isEnAny = (v) => /^en\b|en[-_]/i.test(v.lang);
+
   return (
-    voices.find((v) => /en[-_]US/i.test(v.lang) && /google|samantha|natural/i.test(v.name)) ||
-    voices.find((v) => /en[-_]US/i.test(v.lang)) ||
-    voices.find((v) => /^en\b|en[-_]/i.test(v.lang)) ||
+    voices.find((v) => isEnUS(v) && v.localService && /natural|samantha|zira|david/i.test(v.name)) ||
+    voices.find((v) => isEnUS(v) && v.localService) ||
+    voices.find((v) => isEnAny(v) && v.localService) ||
+    voices.find((v) => isEnUS(v)) ||          // fall back to a network voice
+    voices.find((v) => isEnAny(v)) ||
     null
   );
 }
@@ -258,10 +265,23 @@ export async function speakText(text = "", startChar = 0, { silent = false } = {
   if (!voice) emitState("no-english-voice");
 
   // Brave and other privacy browsers accept speak() without ever producing
-  // sound or firing onerror. If nothing started shortly after, report it.
+  // sound or firing onerror. If nothing started after a while, report it.
+  //
+  // The window is generous (3.5s) because Chrome on Windows can take a couple
+  // of seconds to start a NETWORK voice (the "Google" voices stream their
+  // audio). A shorter timeout produced false "error" reports there.
+  const watchdogText = currentText;
   setTimeout(() => {
-    if (!isSpeaking && !speechSynthesis.speaking) emitState("error");
-  }, 1500);
+    // Only fire if THIS utterance is still the current one and nothing ever
+    // played. `pending` is true while the browser has queued the utterance but
+    // has not started it yet, which is exactly the Chrome/Windows case we must
+    // NOT treat as a failure.
+    const stillNothing =
+      !isSpeaking &&
+      !speechSynthesis.speaking &&
+      !speechSynthesis.pending;
+    if (stillNothing && currentText === watchdogText) emitState("error");
+  }, 3500);
 }
 
 /** Pauses the current reading. */

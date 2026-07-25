@@ -7,9 +7,9 @@ import { saveSession } from "../../helpers/auth.js";
 import { api } from "../../helpers/api.js";
 
 // Local view state
-let step = 1;                // 1 = Account, 2 = Profile
+let step = 1;                 // 1 = Account, 2 = Profile
 let showPass = false;
-let role = "student";        // "student" | "tutor"
+let role = "student";         // "student" | "tutor"
 const form = { name: "", email: "", password: "", role: "student", goal: "" };
 
 const icon = {
@@ -138,9 +138,16 @@ export function registerView() {
             <p class="js-error text-sm text-red-600 hidden"></p>
 
             <button type="submit"
-              class="w-full text-white py-3 rounded-xl text-sm font-semibold transition-colors mt-2 flex items-center justify-center gap-2"
+              class="js-submit-btn relative w-full text-white py-3 rounded-xl text-sm font-semibold transition-all mt-2 flex items-center justify-center gap-1.5 disabled:opacity-75 disabled:cursor-not-allowed"
               style="background: var(--primary)">
-              ${step === 1 ? "Continue" : "Create Account"} ${icon.arrow}
+              <span class="js-btn-text flex items-center gap-2">
+                ${step === 1 ? `Continue ${icon.arrow}` : "Create Account"}
+              </span>
+              <span class="js-btn-dots hidden flex items-center gap-1">
+                <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" style="animation-delay: 0ms"></span>
+                <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" style="animation-delay: 150ms"></span>
+                <span class="w-1.5 h-1.5 bg-white rounded-full animate-bounce" style="animation-delay: 300ms"></span>
+              </span>
             </button>
           </form>
 
@@ -198,7 +205,7 @@ export function initRegister() {
     })
   );
 
-  // Role selection (step 2)
+  // Back button (step 2)
   root.querySelector(".js-back")?.addEventListener("click", () => {
     captureStepData(root);
     step = 1;
@@ -217,13 +224,17 @@ export function initRegister() {
     }
 
     // ── Step 2 complete: create the account against the REAL backend ──
-    // POST /api/auth/register persists the user in PostgreSQL and returns
-    // { token, user } with the same shape as login, so the session survives
-    // reloads and future logins.
     const errorEl = root.querySelector(".js-error");
-    const submitBtn = root.querySelector('button[type="submit"]');
+    const submitBtn = root.querySelector(".js-submit-btn");
+    const btnText = root.querySelector(".js-btn-text");
+    const btnDots = root.querySelector(".js-btn-dots");
+
     errorEl.classList.add("hidden");
+    
+    // Activar estado de carga
     submitBtn.disabled = true;
+    btnText.textContent = "Creating Account";
+    btnDots.classList.remove("hidden");
 
     try {
       const { token, user } = await api.post(
@@ -242,8 +253,7 @@ export function initRegister() {
 
       const destination = user.role === "tutor" ? "/tutor" : "/student";
 
-      // Reset the wizard state so that if the user logs out and returns to
-      // /register, they start fresh.
+      // Reset the wizard state
       step = 1;
       showPass = false;
       role = "student";
@@ -254,7 +264,11 @@ export function initRegister() {
     } catch (err) {
       errorEl.textContent = err.message;
       errorEl.classList.remove("hidden");
+
+      // Restaurar estado si falla
       submitBtn.disabled = false;
+      btnText.textContent = "Create Account";
+      btnDots.classList.add("hidden");
     }
   });
 }

@@ -12,6 +12,7 @@ import { navigate } from "../../router/router.js";
 const GOAL_OPTIONS = LEARNING_GOALS;
 
 const logoutIcon = `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>`;
+const backIcon = `<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>`;
 
 function initials(name = "") {
   return name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
@@ -39,7 +40,13 @@ export function profileView() {
         </div>
 
         <!-- Fields card -->
-        <div class="rounded-2xl p-6 space-y-5" style="background: var(--card); border: 1px solid var(--border)">
+        <div class="relative rounded-2xl p-6 pt-12 space-y-5" style="background: var(--card); border: 1px solid var(--border)">
+          
+          <!-- Botón Back en la esquina superior izquierda -->
+          <button type="button" class="js-back absolute top-4 left-4 p-2 rounded-xl transition-colors hover:bg-black/5" style="color: var(--muted-foreground)">
+            ${backIcon}
+          </button>
+
           <div>
             <label class="block text-sm font-medium mb-1.5">Full name</label>
             <input name="fullName" type="text" value="${user.full_name}"
@@ -78,9 +85,14 @@ export function initProfile() {
   const root = document.getElementById("app");
   initNavbar(root);
 
+  // Back button -> Redirects to Home based on user role ("tutor" or "student")
+  root.querySelector(".js-back")?.addEventListener("click", () => {
+    const user = getSession();
+    const destination = user?.role === "tutor" ? "/tutor" : "/student";
+    navigate(destination);
+  });
+
   // Save changes -> ALWAYS through the service.
-  // ⚠️ The view does NOT touch localStorage: that lives in services/userService.js.
-  //    When PUT /api/users/me exists, only the service changes.
   const saveBtn = root.querySelector(".js-save");
   saveBtn.addEventListener("click", async () => {
     saveBtn.disabled = true;

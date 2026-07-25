@@ -47,12 +47,44 @@ let chunkIndex = 0;
  * Splits text into sentence-ish chunks so we can play/pause between them.
  * Falls back to the whole text as a single chunk if no sentence breaks
  * are found (e.g. a single long clause with no punctuation).
+ *
+ * Chunks are also capped at MAX_CHUNK_CHARS: Chromium-based browsers
+ * (Edge/Chrome) have a long-standing bug where a single utterance that
+ * runs past ~15 seconds of audio can go silent without ever firing
+ * `onend`/`onerror` — our engine would then wait forever for an event
+ * that never comes, which looks exactly like "it worked a few times then
+ * stopped". Keeping chunks short keeps every utterance well under that
+ * window, even at the slowest (0.75×) reading speed.
  */
+const MAX_CHUNK_CHARS = 180;
+
 function splitIntoChunks(text) {
-  const matches = text.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g);
-  const pieces = (matches || [text])
+  const sentences = (text.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g) || [text])
     .map((s) => s.trim())
     .filter(Boolean);
+
+  const pieces = [];
+  for (const sentence of sentences) {
+    if (sentence.length <= MAX_CHUNK_CHARS) {
+      pieces.push(sentence);
+      continue;
+    }
+    // Long sentence (no punctuation to break on) — split further at
+    // word boundaries so no single utterance exceeds the safe length.
+    const words = sentence.split(/\s+/);
+    let buf = "";
+    for (const word of words) {
+      const next = buf ? `${buf} ${word}` : word;
+      if (next.length > MAX_CHUNK_CHARS && buf) {
+        pieces.push(buf);
+        buf = word;
+      } else {
+        buf = next;
+      }
+    }
+    if (buf) pieces.push(buf);
+  }
+
   return pieces.length ? pieces : [text.trim()];
 }
 
@@ -105,11 +137,36 @@ export function setOnStateChange(cb) {
 
 // ─── Basic playback ──────────────────────────────────────────
 
+// Chaining cancel() immediately followed by speak() — which is exactly
+// what pause→play and speed changes do — can desync Chromium's internal
+// speech queue if repeated enough times in a session (a known Chrome/Edge
+// issue). A short delay between the two lets the engine actually flush
+// the cancellation before we ask it to speak again.
+const RESTART_DELAY_MS = 80;
+
+// If an utterance never reports onstart within this window, the engine
+// has likely gone silently stuck (the Chromium "goes mute" bug). We
+// recover by cancelling and giving it one retry instead of hanging
+// forever with a UI that looks paused/broken.
+const START_WATCHDOG_MS = 3000;
+let startWatchdogTimer = null;
+
+function clearStartWatchdog() {
+  if (startWatchdogTimer) {
+    clearTimeout(startWatchdogTimer);
+    startWatchdogTimer = null;
+  }
+}
+
 /**
  * Speaks a single chunk by index. Recursively moves on to the next chunk
  * on natural completion, unless we've been paused/stopped in the meantime.
+ * @param {number} index
+ * @param {boolean} [isRetry=false]  internal flag, one retry allowed
  */
-function playChunk(index) {
+function playChunk(index, isRetry = false) {
+  clearStartWatchdog();
+
   if (index < 0 || index >= chunks.length) {
     // Reached the end of the text.
     isSpeaking = false;
@@ -132,18 +189,21 @@ function playChunk(index) {
   if (voice) utterance.voice = voice;
 
   utterance.onstart = () => {
+    clearStartWatchdog();
     isSpeaking = true;
     emitState("playing");
   };
 
   utterance.onend = () => {
+    clearStartWatchdog();
     isSpeaking = false;
     // Only auto-advance if this ending was natural (not us pausing/
     // stopping, which also triggers onend via cancel()).
-    if (!isPaused) playChunk(chunkIndex + 1);
+    if (!isPaused) setTimeout(() => playChunk(chunkIndex + 1), RESTART_DELAY_MS);
   };
 
   utterance.onerror = (e) => {
+    clearStartWatchdog();
     isSpeaking = false;
     // cancel() fires onerror with error "interrupted"/"canceled" — that's
     // an intentional pause/stop, not a real failure, so stay quiet.
@@ -152,6 +212,20 @@ function playChunk(index) {
   };
 
   speechSynthesis.speak(utterance);
+
+  // Watchdog: if this chunk never actually starts, the engine is stuck.
+  startWatchdogTimer = setTimeout(() => {
+    if (isPaused) return; // user paused while we were waiting — fine
+    speechSynthesis.cancel();
+    if (!isRetry) {
+      // One retry: often enough to shake the engine loose.
+      playChunk(index, true);
+    } else {
+      // Retried and still nothing — give up on this chunk rather than
+      // hang forever, and try to continue with the next one.
+      playChunk(index + 1);
+    }
+  }, START_WATCHDOG_MS);
 }
 
 /**
@@ -168,7 +242,7 @@ export function speakText(text = "", startChunk = 0) {
 
   currentText = text;
   chunks = splitIntoChunks(text);
-  playChunk(startChunk);
+  setTimeout(() => playChunk(startChunk), RESTART_DELAY_MS);
 }
 
 /**
@@ -183,6 +257,7 @@ export function speakText(text = "", startChunk = 0) {
  */
 export function pauseSpeech() {
   if (!isSpeaking || isPaused) return;
+  clearStartWatchdog();
   isPaused = true;
   isSpeaking = false;
   speechSynthesis.cancel();
@@ -193,11 +268,12 @@ export function pauseSpeech() {
 export function resumeSpeech() {
   if (!isPaused) return;
   isPaused = false;
-  playChunk(chunkIndex);
+  setTimeout(() => playChunk(chunkIndex), RESTART_DELAY_MS);
 }
 
 /** Fully stops any reading. */
 export function stopSpeech() {
+  clearStartWatchdog();
   isPaused = false;
   speechSynthesis.cancel();
   isSpeaking = false;
@@ -224,8 +300,10 @@ export function setSpeechRate(rate = 1) {
   currentRate = rate;
 
   if ((isSpeaking || isPaused) && chunks.length) {
+    clearStartWatchdog();
     isPaused = false;
-    playChunk(chunkIndex);
+    speechSynthesis.cancel();
+    setTimeout(() => playChunk(chunkIndex), RESTART_DELAY_MS);
   }
 }
 

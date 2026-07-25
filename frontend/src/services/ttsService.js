@@ -226,14 +226,6 @@ export function speakText(text = "", startChar = 0, { silent = false } = {}) {
   // was playing leaves Chrome in a broken state where the new utterance is
   // queued but never starts — which is why the Original reading was silent.
   const busy = speechSynthesis.speaking || speechSynthesis.pending || speechSynthesis.paused;
-  if (busy) {
-    if (silent) {
-      speechSynthesis.cancel();
-      isSpeaking = false;
-    } else {
-      stopSpeech();
-    }
-  }
 
   // ⚠️ Chrome requires speak() to run in the SAME synchronous turn as the
   // user's click. If we `await` first, Chrome drops the "user gesture" and
@@ -243,10 +235,32 @@ export function speakText(text = "", startChar = 0, { silent = false } = {}) {
   // IMMEDIATELY, no await. Only when the list is empty (Android loads it
   // lazily) do we wait — and there, the click-gesture rule is not enforced.
   const voicesReady = speechSynthesis.getVoices().length > 0;
-  if (voicesReady) {
-    launchUtterance(text, startChar, silent);
+
+  const launch = () => {
+    if (voicesReady) {
+      launchUtterance(text, startChar, silent);
+    } else {
+      waitForVoices().then(() => launchUtterance(text, startChar, silent));
+    }
+  };
+
+  if (busy) {
+    // Something was already playing/queued. cancel() + speak() in the SAME
+    // turn is the pattern that leaves Chrome stuck (utterance queued, never
+    // starts) — verified on the affected Windows machine. So cancel now, let
+    // the engine settle for one frame, then speak. The user gesture is not
+    // needed here because audio was already running in this session.
+    if (silent) {
+      speechSynthesis.cancel();
+      isSpeaking = false;
+    } else {
+      stopSpeech();
+    }
+    setTimeout(launch, 250);
   } else {
-    waitForVoices().then(() => launchUtterance(text, startChar, silent));
+    // Nothing was playing: speak immediately in the same turn as the click so
+    // Chrome keeps the user gesture. No cancel(), so nothing to recover from.
+    launch();
   }
 }
 
@@ -377,15 +391,22 @@ function handleSilentFailure(reason) {
   // Bare utterance: NO voice assigned, system default path. This is the same
   // configuration that was verified to work on the affected Chrome/Windows
   // machine when every listed voice failed.
-  try {
-    const diag = new SpeechSynthesisUtterance(message);
-    diag.lang = "es-ES";
-    diag.volume = 1;
-    diag.rate = 1;
-    speechSynthesis.speak(diag);
-  } catch {
-    /* nothing else can be done audibly */
-  }
+  // We already called speechSynthesis.cancel() above. Calling speak() in the
+  // SAME turn right after cancel() is exactly the pattern that leaves Chrome
+  // stuck (utterance queued, never starts) — confirmed on the affected
+  // machine. Since we are already inside a setTimeout (no user gesture to
+  // preserve), give the engine a short breath before speaking the message.
+  setTimeout(() => {
+    try {
+      const diag = new SpeechSynthesisUtterance(message);
+      diag.lang = "es-ES";
+      diag.volume = 1;
+      diag.rate = 1;
+      speechSynthesis.speak(diag);
+    } catch {
+      /* nothing else can be done audibly */
+    }
+  }, 250);
 
   // If the failure was the broken network voice, stop trusting the cached
   // voice for the rest of the session: next readings go straight through the

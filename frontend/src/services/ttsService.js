@@ -158,13 +158,34 @@ function clearStartWatchdog() {
   }
 }
 
+// How far into the CURRENT chunk we've actually gotten, in characters.
+// Updated live via onboundary while speaking, and used by pauseSpeech to
+// know exactly where to resume — so Play continues instead of repeating
+// the whole sentence. Reset to 0 whenever a chunk starts fresh.
+let chunkResumeOffset = 0;
+
+// Whether onboundary has fired at least once for the utterance currently
+// playing. Some voices (notably Edge's "Online/Natural" ones) never fire
+// it at all, in which case we have no word-level position to resume from.
+let currentChunkBoundaryFired = false;
+
+// Where resumeSpeech() should continue from, decided by pauseSpeech():
+// either the exact spot in the current chunk (boundary info available) or
+// the start of the next chunk (no boundary info — skip rather than repeat).
+let pausedTargetIndex = 0;
+let pausedTargetOffset = 0;
+
 /**
  * Speaks a single chunk by index. Recursively moves on to the next chunk
  * on natural completion, unless we've been paused/stopped in the meantime.
  * @param {number} index
- * @param {boolean} [isRetry=false]  internal flag, one retry allowed
+ * @param {object} [opts]
+ * @param {boolean} [opts.isRetry=false]     internal flag, one retry allowed
+ * @param {number}  [opts.resumeOffset=0]    char offset into chunks[index]
+ *                                           to resume from (skips the part
+ *                                           already spoken before pausing)
  */
-function playChunk(index, isRetry = false) {
+function playChunk(index, { isRetry = false, resumeOffset = 0 } = {}) {
   clearStartWatchdog();
 
   if (index < 0 || index >= chunks.length) {
@@ -172,13 +193,27 @@ function playChunk(index, isRetry = false) {
     isSpeaking = false;
     isPaused = false;
     chunkIndex = 0;
+    chunkResumeOffset = 0;
     emitState("stopped");
     return;
   }
 
-  chunkIndex = index;
+  const fullChunk = chunks[index];
+  const textToSpeak = resumeOffset > 0 ? fullChunk.slice(resumeOffset).trim() : fullChunk;
 
-  utterance = new SpeechSynthesisUtterance(chunks[index]);
+  // Nothing meaningful left in this chunk (we paused right at its end) —
+  // move straight on to the next one instead of speaking an empty/near-
+  // empty utterance.
+  if (!textToSpeak) {
+    playChunk(index + 1);
+    return;
+  }
+
+  chunkIndex = index;
+  chunkResumeOffset = resumeOffset;
+  currentChunkBoundaryFired = false;
+
+  utterance = new SpeechSynthesisUtterance(textToSpeak);
   utterance.rate = currentRate;
   utterance.lang = "en-US";
 
@@ -194,9 +229,21 @@ function playChunk(index, isRetry = false) {
     emitState("playing");
   };
 
+  // Tracks progress WITHIN this chunk as the voice crosses word/sentence
+  // boundaries. resumeOffset is the base (how much of the chunk we'd
+  // already skipped to get here), so this always holds the absolute
+  // position inside the original chunk text.
+  utterance.onboundary = (e) => {
+    currentChunkBoundaryFired = true;
+    if (typeof e.charIndex === "number") {
+      chunkResumeOffset = resumeOffset + e.charIndex;
+    }
+  };
+
   utterance.onend = () => {
     clearStartWatchdog();
     isSpeaking = false;
+    chunkResumeOffset = 0; // this chunk finished fully
     // Only auto-advance if this ending was natural (not us pausing/
     // stopping, which also triggers onend via cancel()).
     if (!isPaused) setTimeout(() => playChunk(chunkIndex + 1), RESTART_DELAY_MS);
@@ -219,10 +266,10 @@ function playChunk(index, isRetry = false) {
     speechSynthesis.cancel();
     if (!isRetry) {
       // One retry: often enough to shake the engine loose.
-      playChunk(index, true);
+      playChunk(index, { isRetry: true, resumeOffset });
     } else {
       // Retried and still nothing — give up on this chunk rather than
-      // hang forever, and try to continue with the next one.
+      // hang forever, and continue with the next one.
       playChunk(index + 1);
     }
   }, START_WATCHDOG_MS);
@@ -239,6 +286,7 @@ export function speakText(text = "", startChunk = 0) {
 
   speechSynthesis.cancel();
   isPaused = false;
+  chunkResumeOffset = 0;
 
   currentText = text;
   chunks = splitIntoChunks(text);
@@ -260,15 +308,33 @@ export function pauseSpeech() {
   clearStartWatchdog();
   isPaused = true;
   isSpeaking = false;
+
+  if (currentChunkBoundaryFired) {
+    // We know exactly where we got to in this sentence — resume there.
+    pausedTargetIndex = chunkIndex;
+    pausedTargetOffset = chunkResumeOffset;
+  } else {
+    // This voice never reported word-level progress (common with Edge's
+    // "Online/Natural" voices), so we have no idea where mid-sentence we
+    // stopped. Repeating the sentence from its start would sound like a
+    // stutter, so instead we pick up with the NEXT sentence — nothing is
+    // ever repeated, at the cost of skipping the tail of this one.
+    pausedTargetIndex = chunkIndex + 1;
+    pausedTargetOffset = 0;
+  }
+
   speechSynthesis.cancel();
   emitState("paused");
 }
 
-/** Resumes a paused reading by re-speaking the sentence we paused on. */
+/** Resumes a paused reading from wherever pauseSpeech determined we should. */
 export function resumeSpeech() {
   if (!isPaused) return;
   isPaused = false;
-  setTimeout(() => playChunk(chunkIndex), RESTART_DELAY_MS);
+  setTimeout(
+    () => playChunk(pausedTargetIndex, { resumeOffset: pausedTargetOffset }),
+    RESTART_DELAY_MS
+  );
 }
 
 /** Fully stops any reading. */
@@ -301,9 +367,14 @@ export function setSpeechRate(rate = 1) {
 
   if ((isSpeaking || isPaused) && chunks.length) {
     clearStartWatchdog();
+    // Reuse whichever position we already know about: if we were paused,
+    // pauseSpeech() already decided the right resume point; if we were
+    // actively speaking, use the live position tracked via onboundary.
+    const targetIndex = isPaused ? pausedTargetIndex : chunkIndex;
+    const targetOffset = isPaused ? pausedTargetOffset : chunkResumeOffset;
     isPaused = false;
     speechSynthesis.cancel();
-    setTimeout(() => playChunk(chunkIndex), RESTART_DELAY_MS);
+    setTimeout(() => playChunk(targetIndex, { resumeOffset: targetOffset }), RESTART_DELAY_MS);
   }
 }
 

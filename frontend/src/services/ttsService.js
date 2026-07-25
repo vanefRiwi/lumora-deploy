@@ -41,6 +41,12 @@ let currentCharIndex = 0;
 // We record when the current utterance started and how many characters into
 // the original text it began, so elapsed time can be turned into an offset.
 let speechStartedAt = 0;
+
+// Chrome-on-desktop keep-alive. Chrome silently pauses synthesis after ~15s
+// of continuous speech due to an internal timer bug. A periodic pause/resume
+// resets that timer so long passages read to the end. Harmless on other
+// browsers, so we run it everywhere.
+let keepAliveTimer = null;
 let speechStartOffset = 0;
 let sawBoundaryEvent = false;
 
@@ -163,6 +169,28 @@ export function setOnStateChange(cb) {
   onStateChange = cb;
 }
 
+/**
+ * Chrome pauses synthesis after roughly 15 seconds of continuous speech, a
+ * long-standing engine bug. Toggling pause/resume every 10s resets its timer
+ * so long passages finish. No-op harm on browsers that don't need it.
+ */
+function startKeepAlive() {
+  stopKeepAlive();
+  keepAliveTimer = setInterval(() => {
+    if (speechSynthesis.speaking && !speechSynthesis.paused) {
+      speechSynthesis.pause();
+      speechSynthesis.resume();
+    }
+  }, 10000);
+}
+
+function stopKeepAlive() {
+  if (keepAliveTimer) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+  }
+}
+
 // ─── Basic playback ──────────────────────────────────────────
 
 /**
@@ -188,11 +216,19 @@ export function speakText(text = "", startChar = 0, { silent = false } = {}) {
 
   // Cancel whatever is playing. When `silent` we suppress the "stopped"
   // event: a speed change is a continuation, not a stop.
-  if (silent) {
-    speechSynthesis.cancel();
-    isSpeaking = false;
-  } else {
-    stopSpeech();
+  //
+  // ⚠️ Only cancel if something is actually playing or queued. Calling
+  // speechSynthesis.cancel() and then speak() in the same turn when nothing
+  // was playing leaves Chrome in a broken state where the new utterance is
+  // queued but never starts — which is why the Original reading was silent.
+  const busy = speechSynthesis.speaking || speechSynthesis.pending || speechSynthesis.paused;
+  if (busy) {
+    if (silent) {
+      speechSynthesis.cancel();
+      isSpeaking = false;
+    } else {
+      stopSpeech();
+    }
   }
 
   // ⚠️ Chrome requires speak() to run in the SAME synchronous turn as the
@@ -251,6 +287,7 @@ function launchUtterance(text, startChar, silent) {
   utterance.onstart = () => {
     isSpeaking = true;
     speechStartedAt = Date.now();   // baseline for the time estimate
+    startKeepAlive();               // prevent Chrome's ~15s auto-pause
     emitState("playing");
   };
 
@@ -258,12 +295,14 @@ function launchUtterance(text, startChar, silent) {
     isSpeaking = false;
     currentCharIndex = 0;   // finished: reset progress
     speechStartedAt = 0;
+    stopKeepAlive();
     emitState("stopped");
   };
 
   utterance.onerror = (e) => {
     isSpeaking = false;
     speechStartedAt = 0;
+    stopKeepAlive();
     // "interrupted" and "canceled" happen whenever WE stop on purpose
     // (new reading, speed change, closing the bar): not real failures.
     if (e?.error && !["interrupted", "canceled"].includes(e.error)) {
@@ -327,6 +366,7 @@ export function resumeSpeech() {
 /** Fully stops any reading. */
 export function stopSpeech() {
   if (!isSpeechSupported()) return;
+  stopKeepAlive();
   speechSynthesis.cancel();
   isSpeaking = false;
   speechStartedAt = 0;

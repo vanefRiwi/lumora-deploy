@@ -6,9 +6,9 @@ import { itemRepository } from "../item/item.repository.js";
 
 async function assertOwner(courseId, tutorId) {
   const course = await courseRepository.findById(courseId);
-  if (!course) throw Object.assign(new Error("Curso no encontrado"), { status: 404 });
+  if (!course) throw Object.assign(new Error("Course not found"), { status: 404 });
   if (course.tutor_id !== Number(tutorId)) {
-    throw Object.assign(new Error("No eres dueño de este curso"), { status: 403 });
+    throw Object.assign(new Error("You are not the owner of this course"), { status: 403 });
   }
   return course;
 }
@@ -73,8 +73,8 @@ export const courseFullServices = {
     await assertOwner(courseId, tutorId);
 
     const result = await courseServices.updateExistingCourse(courseId, tutorId, payload);
-    if (result.error === "NOT_FOUND") throw Object.assign(new Error("Curso no encontrado"), { status: 404 });
-    if (result.error === "FORBIDDEN") throw Object.assign(new Error("No eres dueño de este curso"), { status: 403 });
+    if (result.error === "NOT_FOUND") throw Object.assign(new Error("Course not found"), { status: 404 });
+    if (result.error === "FORBIDDEN") throw Object.assign(new Error("You are not the owner of this course"), { status: 403 });
 
     await courseFullRepository.syncContent(courseId, payload);
     return buildFullCourse(courseId);

@@ -70,9 +70,9 @@ export const courseRepository = {
     return rows[0] || null;
   },
 
-  // Stats globales de los cursos de un tutor (para su dashboard).
-  // ⚠️ Subqueries independientes: un doble LEFT JOIN (enrollments × sections)
-  // multiplicaba las filas e inflaba los conteos.
+ // Global course statistics for a tutor (for their dashboard).
+// Independent subqueries: a double LEFT JOIN (enrollments × sections)
+// was multiplying rows and inflating counts.
   statsForTutor: async (tutorId) => {
     const { rows } = await pool.query(
       `SELECT

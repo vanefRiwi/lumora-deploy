@@ -3,10 +3,10 @@ import { itemRepository } from "../item/item.repository.js";
 import { sectionRepository } from "../section/section.repository.js";
 import { enrollmentRepository } from "../enrollment/enrollment.repository.js";
 
-// 🔒 La calificación SIEMPRE se hace en el servidor: el cliente solo manda
-// las respuestas del alumno, nunca ve las correctas de antemano (item.services
-// las quita en el GET). Esto corrige el hueco de seguridad documentado en
-// courseService.js del frontend (Blocker de integración).
+//  Grading is ALWAYS performed on the server: the client only sends
+// the student's answers and never sees the correct ones beforehand (item.services
+// strips them out during the GET request). This fixes the security vulnerability
+// documented in the frontend's courseService.js (integration blocker).
 function grade(questions, answers) {
   const total = questions.length;
   const correct = questions.filter((q) => answers?.[q.id] === q.correct).length;
@@ -15,7 +15,7 @@ function grade(questions, answers) {
 
 async function assertEnrolled(studentId, courseId) {
   const enrolled = await enrollmentRepository.isEnrolled(studentId, courseId);
-  if (!enrolled) throw Object.assign(new Error("No estás inscrito en este curso"), { status: 403 });
+  if (!enrolled) throw Object.assign(new Error("You are not enrolled on this course"), { status: 403 });
 }
 
 export const submissionServices = {
@@ -29,11 +29,11 @@ export const submissionServices = {
     if (type === "quizz") {
       if (!section_id) throw Object.assign(new Error("section_id es obligatorio"), { status: 400 });
       const section = await sectionRepository.findById(section_id);
-      if (!section) throw Object.assign(new Error("Sección no encontrada"), { status: 404 });
+      if (!section) throw Object.assign(new Error("Section not found"), { status: 404 });
       await assertEnrolled(studentId, section.course_id);
 
       const quizz = await itemRepository.findSingle(section_id, "quizz");
-      if (!quizz) throw Object.assign(new Error("Este quizz no existe"), { status: 404 });
+      if (!quizz) throw Object.assign(new Error("This quizz does not exist"), { status: 404 });
 
       const questions = quizz.payload.questions || [];
       const { correct, total } = grade(questions, answers);
@@ -44,18 +44,18 @@ export const submissionServices = {
         answers, score: correct, total, points, correct: null,
       });
 
-      // correctAnswers viaja SOLO en la respuesta del submit (nunca en el GET),
-      // para que la vista pinte en verde las opciones correctas tras enviar.
+       // correctAnswers is sent ONLY in the submit response (never in the GET request),
+      // so that the view highlights the correct options in green after submission.
       const correctAnswers = Object.fromEntries(questions.map((q) => [q.id, q.correct]));
       return { correct, total, points, correctAnswers };
     }
 
     if (type === "final") {
-      if (!course_id) throw Object.assign(new Error("course_id es obligatorio"), { status: 400 });
+      if (!course_id) throw Object.assign(new Error("course_id is mandatory"), { status: 400 });
       await assertEnrolled(studentId, course_id);
 
       const final = await itemRepository.findFinal(course_id);
-      if (!final) throw Object.assign(new Error("El examen final no existe"), { status: 404 });
+      if (!final) throw Object.assign(new Error("This final assestment does not exist"), { status: 404 });
 
       const questions = final.payload.questions || [];
       const { correct, total } = grade(questions, answers);
@@ -70,11 +70,11 @@ export const submissionServices = {
     }
 
     if (type === "review") {
-      // Las reviews son práctica: no dan puntos ni pasan por corrección server-side,
-      // solo se registra que se completaron (igual que el contrato del frontend).
-      if (!section_id) throw Object.assign(new Error("section_id es obligatorio"), { status: 400 });
+      // Reviews are for practice: they don't award points or undergo server-side validation;
+      // only their completion is recorded (just like the frontend contract).
+      if (!section_id) throw Object.assign(new Error("section_id is mandatory"), { status: 400 });
       const section = await sectionRepository.findById(section_id);
-      if (!section) throw Object.assign(new Error("Sección no encontrada"), { status: 404 });
+      if (!section) throw Object.assign(new Error("Section not found"), { status: 404 });
       await assertEnrolled(studentId, section.course_id);
 
       await submissionRepository.upsertSection({
@@ -85,11 +85,11 @@ export const submissionServices = {
       return { completed: true, correct: Boolean(body.correct) };
     }
 
-    throw Object.assign(new Error("Tipo de submission inválido"), { status: 400 });
+    throw Object.assign(new Error("Invalid type of submission"), { status: 400 });
   },
 
   /**
-   * GET /api/courses/:courseId/progress — progreso del estudiante autenticado.
+   * GET /api/courses/:courseId/progress — progress of authenticated student.
    */
   getProgress: async (studentId, courseId) => {
     const rows = await submissionRepository.findAllForStudentInCourse(studentId, courseId);

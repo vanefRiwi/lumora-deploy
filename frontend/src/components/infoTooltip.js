@@ -22,12 +22,19 @@ function esc(str = "") {
 
 // `place` defaults to "top": inside a form a downward tooltip would cover the
 // field below, and a card with overflow-hidden could clip it.
-// `align` is the horizontal anchor: "right" makes the bubble grow leftwards,
-// which is what keeps it inside the viewport on narrow screens.
+// `align` is the horizontal anchor when the bubble is sized by content.
+// `full` is the safe option for form fields: the bubble spans the whole width
+// of its parent instead of hanging off a 16px icon, so it can never overflow
+// the screen. It requires the parent element to carry `relative`.
 // `highlight` paints one literal fragment of the hint in the primary color.
-export function infoTooltip(text, { place = "top", align = "left", highlight = "" } = {}) {
+export function infoTooltip(
+  text,
+  { place = "top", align = "left", highlight = "", full = false } = {}
+) {
   const pos = place === "bottom" ? "top-full mt-2" : "bottom-full mb-2";
-  const side = align === "right" ? "right-0" : "left-0";
+  // In full mode the bubble stretches between both edges of the parent.
+  const side = full ? "left-0 right-0" : (align === "right" ? "right-0" : "left-0");
+  const width = full ? "" : "w-56 max-w-[calc(100vw-4rem)]";
 
   // Escape first, then colorize: the highlight is matched against the already
   // escaped text, so it can never be used to inject markup.
@@ -40,14 +47,14 @@ export function infoTooltip(text, { place = "top", align = "left", highlight = "
   }
 
   return `
-    <span class="js-info group/info relative inline-flex align-middle ml-1">
+    <span class="js-info group/info ${full ? "" : "relative"} inline-flex align-middle ml-1">
       <button type="button" data-info aria-label="More information"
         class="flex items-center justify-center w-4 h-4 rounded-full transition-all
                hover:scale-110 focus:outline-none focus-visible:ring-2"
         style="background: var(--secondary); color: var(--primary)">${infoIcon}</button>
 
       <span role="tooltip"
-        class="js-tip pointer-events-none absolute ${pos} ${side} z-30 w-56 max-w-[calc(100vw-4rem)]
+        class="js-tip pointer-events-none absolute ${pos} ${side} ${width} z-30
                p-2.5 rounded-lg text-[11px] font-normal leading-relaxed text-left normal-case
                opacity-0 invisible translate-y-1
                transition-all duration-200 ease-out

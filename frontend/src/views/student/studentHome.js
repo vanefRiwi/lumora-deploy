@@ -151,6 +151,11 @@ function bindCardActions(root) {
       if (enrolledIds.includes(id)) navigate(`/student/course?id=${id}`);
     })
   );
+  // Info button: on touch devices a tap is needed to reveal the tooltip,
+  // so the click must not bubble up and open the course.
+  root.querySelectorAll("[data-info]").forEach((btn) =>
+    btn.addEventListener("click", (e) => e.stopPropagation())
+  );
 
   root.querySelectorAll("[data-join]").forEach((btn) =>
     btn.addEventListener("click", async (e) => {

@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import { pool } from "./postgres.db.js";
 
 /**
- * 🏗️ Lumora's complete scheme.
+ *  Lumora's complete scheme.
  * It runs in every boot (CREATE TABLE IF NOT EXISTS is idempotent),
  * so there's no need to run migrations manually to have everything MVP up.
  */

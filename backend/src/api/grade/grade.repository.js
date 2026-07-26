@@ -1,7 +1,7 @@
 import { pool } from "../../config/postgres/postgres.db.js";
 
 export const gradeRepository = {
-  // Estudiantes inscritos en el curso + TODAS sus submissions, en una sola query.
+  // Students enrolled in the course + ALL their submissions, in a single query.
   findStudentsWithSubmissions: async (courseId) => {
     const { rows } = await pool.query(
       `SELECT u.id, u.full_name, u.email,

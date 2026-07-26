@@ -56,7 +56,10 @@ function blockBody(block) {
   return tituloField + `
     <label class="block text-xs font-medium mb-1.5">
       Canva embed link
-      ${infoTooltip("Use the public embed link, add ?embed at the end")}
+      ${infoTooltip("Use the public embed link, add ?embed at the end", {
+        align: "right",
+        highlight: "?embed",
+      })}
     </label>
     <input type="url" data-block-input="${block.id}" value="${block.datos || ""}"
       class="w-full px-3 py-2 rounded-lg text-sm outline-none"
@@ -91,8 +94,10 @@ export function contentTab(blocks = [], { menuOpen = false } = {}) {
     .map((b, i) => {
       const label = LABELS[b.tipo];
       return `
-        <div class="rounded-xl mb-3 overflow-hidden" style="background: var(--card); border: 1px solid var(--border)">
-          <div class="flex items-center justify-between px-4 py-2.5"
+        <div class="rounded-xl mb-3" style="background: var(--card); border: 1px solid var(--border)">
+          <!-- No overflow-hidden here: it would clip the info tooltip on narrow
+               screens. The header rounds its own top corners instead. -->
+          <div class="flex items-center justify-between px-4 py-2.5 rounded-t-xl"
                style="background: var(--muted); border-bottom: 1px solid var(--border)">
             <span class="flex items-center gap-1.5 text-xs font-semibold" style="color: ${label.color}">
               ${label.icon} ${label.text}

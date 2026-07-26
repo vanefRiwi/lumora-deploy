@@ -4,8 +4,9 @@
 //   - student: "+Join Course" button (or "Leave" if already enrolled)
 //   - tutor:   "Edit" and "Preview" buttons
 //
-// Students also get an "i" button on the top-right corner: on hover (or on
-// keyboard focus) it reveals the course description in a translucent tooltip.
+// Students also get an "i" button on the top-right corner: it reveals the
+// course description in a translucent tooltip, on hover (desktop) or on
+// tap (touch devices, handled by bindInfoTooltips below).
 
 import { LEVEL_COLORS } from "../constants/ui.js";
 
@@ -61,8 +62,9 @@ export function courseCard(course, { role = "student", isJoined = false } = {}) 
     : "";
 
   // ── Info button + description tooltip (student only) ──
-  // Pure CSS: the wrapper is a named group, the tooltip reacts to
-  // group-hover (mouse) and group-focus-within (keyboard / tap).
+  // Hover is handled by CSS (named group). Touch is handled by JS, because
+  // there is no hover on mobile and iOS Safari never focuses a <button> on
+  // tap, so :focus-within would never fire there.
   const description = esc(course.description || "").trim();
   const infoTooltip = role === "student"
     ? `
@@ -76,12 +78,11 @@ export function courseCard(course, { role = "student", isJoined = false } = {}) 
         </button>
 
         <div role="tooltip"
-          class="pointer-events-none absolute right-0 top-full mt-2 w-56 max-w-[calc(100vw-3rem)]
+          class="js-tip pointer-events-none absolute right-0 top-full mt-2 w-56 max-w-[calc(100vw-3rem)]
                  p-3 rounded-xl text-xs leading-relaxed text-left
                  opacity-0 invisible translate-y-1
                  transition-all duration-200 ease-out
-                 group-hover/info:opacity-100 group-hover/info:visible group-hover/info:translate-y-0
-                 group-focus-within/info:opacity-100 group-focus-within/info:visible group-focus-within/info:translate-y-0"
+                 group-hover/info:opacity-100 group-hover/info:visible group-hover/info:translate-y-0"
           style="background: color-mix(in srgb, var(--card) 82%, transparent);
                  backdrop-filter: blur(10px);
                  -webkit-backdrop-filter: blur(10px);
@@ -125,4 +126,51 @@ export function courseCard(course, { role = "student", isJoined = false } = {}) 
       </div>
     </article>
   `;
+}
+
+// ─── Info tooltip: touch support ─────────────────────────────────────────────
+// On desktop the CSS group-hover is enough. On touch there is no hover, and
+// iOS Safari does not give focus to a <button> on tap, so the tap toggles the
+// tooltip styles directly.
+
+function closeAllInfo() {
+  document.querySelectorAll(".js-info .js-tip").forEach((tip) => {
+    tip.style.opacity = "";
+    tip.style.visibility = "";
+    tip.style.transform = "";
+  });
+}
+
+// Registered once for the whole app: tapping anywhere else closes the tooltip.
+if (!window.__lumoraInfoOutsideBound) {
+  window.__lumoraInfoOutsideBound = true;
+  document.addEventListener("click", closeAllInfo);
+}
+
+// Must be called after every render that produces course cards.
+export function bindInfoTooltips(root = document) {
+  root.querySelectorAll(".js-info").forEach((wrapper) => {
+    const btn = wrapper.querySelector("[data-info]");
+    const tip = wrapper.querySelector(".js-tip");
+    if (!btn || !tip) return;
+
+    // bindCardActions runs on mount AND on every grid refresh, so without
+    // this guard the listeners would stack up and cancel each other out.
+    if (btn.dataset.bound === "1") return;
+    btn.dataset.bound = "1";
+
+    btn.addEventListener("click", (e) => {
+      // Must not reach the card underneath (it would open the course).
+      e.stopPropagation();
+      e.preventDefault();
+
+      const wasOpen = tip.style.visibility === "visible";
+      closeAllInfo();
+      if (!wasOpen) {
+        tip.style.opacity = "1";
+        tip.style.visibility = "visible";
+        tip.style.transform = "translateY(0)";
+      }
+    });
+  });
 }

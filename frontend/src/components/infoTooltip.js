@@ -1,0 +1,83 @@
+// ─── Info tooltip ─────────────────────────────────────────────────────────────
+// Small "i" bubble that reveals a hint on hover (desktop) or on tap (mobile).
+// Hover is pure CSS; touch needs JS, because there is no hover on mobile and
+// iOS Safari never focuses a <button> on tap, so :focus-within never fires.
+//
+// Usage:
+//   import { infoTooltip, bindInfoTooltips } from "../infoTooltip.js";
+//   `<label>Canva embed link ${infoTooltip("Your hint here")}</label>`
+//   ...and call bindInfoTooltips(root) after every render.
+
+const infoIcon = `<svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`;
+
+function esc(str = "") {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// `place` is "top" by default: inside a form the field below would be covered,
+// and a card with overflow-hidden could clip a downward tooltip.
+export function infoTooltip(text, { place = "top", align = "left" } = {}) {
+  const pos = place === "bottom" ? "top-full mt-2" : "bottom-full mb-2";
+  const side = align === "right" ? "right-0" : "left-0";
+
+  return `
+    <span class="js-info group/info relative inline-flex align-middle ml-1">
+      <button type="button" data-info aria-label="More information"
+        class="flex items-center justify-center w-4 h-4 rounded-full transition-all
+               hover:scale-110 focus:outline-none focus-visible:ring-2"
+        style="background: var(--secondary); color: var(--primary)">${infoIcon}</button>
+
+      <span role="tooltip"
+        class="js-tip pointer-events-none absolute ${pos} ${side} z-30 w-52 max-w-[calc(100vw-3rem)]
+               p-2.5 rounded-lg text-[11px] font-normal leading-relaxed text-left normal-case
+               opacity-0 invisible translate-y-1
+               transition-all duration-200 ease-out
+               group-hover/info:opacity-100 group-hover/info:visible group-hover/info:translate-y-0"
+        style="background: color-mix(in srgb, var(--card) 90%, transparent);
+               backdrop-filter: blur(10px);
+               -webkit-backdrop-filter: blur(10px);
+               border: 1px solid var(--border);
+               color: var(--foreground);
+               box-shadow: 0 8px 24px rgba(15, 31, 15, 0.14)">${esc(text)}</span>
+    </span>`;
+}
+
+function closeAllInfo() {
+  document.querySelectorAll(".js-info .js-tip").forEach((tip) => {
+    tip.style.opacity = "";
+    tip.style.visibility = "";
+    tip.style.transform = "";
+  });
+}
+
+if (!window.__lumoraInfoTooltipBound) {
+  window.__lumoraInfoTooltipBound = true;
+  document.addEventListener("click", closeAllInfo);
+}
+
+// Must be called after every render that produces tooltips.
+export function bindInfoTooltips(root = document) {
+  root.querySelectorAll(".js-info").forEach((wrapper) => {
+    const btn = wrapper.querySelector("[data-info]");
+    const tip = wrapper.querySelector(".js-tip");
+    if (!btn || !tip) return;
+    if (btn.dataset.bound === "1") return;   // attachEvents runs on every rerender
+    btn.dataset.bound = "1";
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const wasOpen = tip.style.visibility === "visible";
+      closeAllInfo();
+      if (!wasOpen) {
+        tip.style.opacity = "1";
+        tip.style.visibility = "visible";
+        tip.style.transform = "translateY(0)";
+      }
+    });
+  });
+}

@@ -1,3 +1,4 @@
+
 // ─── Course Editor (Tutor) ────────────────────────────────────────────────────
 // Create or edit a course. Replica of Figma design.
 //
@@ -385,6 +386,48 @@ function captureTab(root) {
   }
 }
 
+// ─── Save button loading state ───────────────────────────────────────────────
+// Prevents duplicated courses caused by repeated clicks while the request
+// is still in flight.
+let isSaving = false;
+
+const SAVING_MARKUP = `
+  <span class="inline-flex items-center gap-1">
+    Saving
+    <span class="inline-flex gap-0.5">
+      <span class="animate-bounce" style="animation-delay: 0ms">.</span>
+      <span class="animate-bounce" style="animation-delay: 150ms">.</span>
+      <span class="animate-bounce" style="animation-delay: 300ms">.</span>
+    </span>
+  </span>`;
+
+function setSaving(btn, saving) {
+  if (!btn) return;
+  isSaving = saving;
+
+  if (saving) {
+    // Keep the original markup so it can be restored if the request fails.
+    if (!btn.dataset.originalHtml) btn.dataset.originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.style.pointerEvents = "none";
+    btn.style.opacity = "0.7";
+    btn.style.cursor = "not-allowed";
+    btn.setAttribute("aria-busy", "true");
+    btn.innerHTML = SAVING_MARKUP;
+    return;
+  }
+
+  btn.disabled = false;
+  btn.style.pointerEvents = "";
+  btn.style.opacity = "";
+  btn.style.cursor = "";
+  btn.removeAttribute("aria-busy");
+  if (btn.dataset.originalHtml) {
+    btn.innerHTML = btn.dataset.originalHtml;
+    delete btn.dataset.originalHtml;
+  }
+}
+
 function captureAll(root) {
   captureLeft(root);
   captureTab(root);
@@ -564,13 +607,21 @@ function attachEvents(root) {
   attachTabEvents(root);
 
   // ── Save ──
-  root.querySelector(".js-save").addEventListener("click", async () => {
-    captureAll(root);
+  const saveBtn = root.querySelector(".js-save");
+
+  saveBtn.addEventListener("click", async () => {
+    // Extra guard: even if a click sneaks through (double click, Enter key),
+    // it never starts a second request.
+    if (isSaving) return;
+
     const msg = root.querySelector(".js-msg");
+    setSaving(saveBtn, true);
+    captureAll(root);
 
     if (!state.title.trim()) {
       msg.style.color = "#dc2626";
       msg.textContent = "The course needs a title";
+      setSaving(saveBtn, false);
       return;
     }
 
@@ -591,10 +642,14 @@ function attachEvents(root) {
       syncStateFromServer(saved);
       msg.style.color = "var(--primary)";
       msg.textContent = "";
+      // The button stays disabled on success: we are about to leave the view,
+      // so there is no way to fire a duplicated request during the redirect.
       setTimeout(() => navigate("/tutor"), 1200);
     } catch (err) {
       msg.style.color = "#dc2626";
       msg.textContent = err.message;
+      // Failure: restore the button so the tutor can retry.
+      setSaving(saveBtn, false);
     }
   });
 }
@@ -802,6 +857,7 @@ function syncStateFromServer(saved) {
 // ─── Init ────────────────────────────────────────────────────────────────────
 export async function initCourseEditor() {
   const root = document.getElementById("app");
+  isSaving = false;   // fresh editor: the flag never survives a navigation
 
   // ?id=X in URL -> edit existing course (loaded COMPLETE from the backend)
   const params = new URLSearchParams(location.search);

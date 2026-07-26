@@ -2,8 +2,8 @@ import { gradeRepository } from "./grade.repository.js";
 import { sectionRepository } from "../section/section.repository.js";
 import { courseRepository } from "../course/course.repository.js";
 
-// Misma fórmula que el frontend (courseService.calculateFinalGrade):
-// promedio de (quizz de cada sección + examen final), no presentados = 0.
+// Same formula as the frontend (courseService.calculateFinalGrade):
+// average of (quiz from each section + final exam); missed assessments = 0.
 function buildBreakdown(sections, submissions) {
   const quizzesBySection = {};
   let finalSub = null;
@@ -43,8 +43,8 @@ function buildBreakdown(sections, submissions) {
 
 export const gradeServices = {
   /**
-   * GET /api/courses/:id/students (tutor) — estudiantes inscritos con su
-   * nota desglosada, calculada server-side con la MISMA fórmula del frontend.
+   * GET /api/courses/:id/students (tutor) — enrolled students with their
+   * grade breakdown, calculated server-side using the SAME formula as the frontend.
    */
   getCourseStudents: async (courseId, tutorId) => {
     const course = await courseRepository.findById(courseId);
@@ -59,8 +59,8 @@ export const gradeServices = {
     return students.map((st) => {
       const { breakdown, finalGrade, points } = buildBreakdown(sections, st.submissions);
 
-      // `progress` con el MISMO shape que GET /courses/:id/progress, para que el
-      // dashboard del frontend reutilice calculateFinalGrade() sin cambios.
+       // `progress` with the SAME shape as GET /courses/:id/progress, so that the
+      // frontend dashboard can reuse calculateFinalGrade() without changes.
       const progress = { quizzes: {}, reviews: {}, final: null };
       for (const s of st.submissions) {
         if (s.item_type === "quizz") {

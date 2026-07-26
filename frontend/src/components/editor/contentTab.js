@@ -54,10 +54,10 @@ function blockBody(block) {
 
   // canva
   return tituloField + `
-    <label class="block text-xs font-medium mb-1.5">
+    <label class="relative block text-xs font-medium mb-1.5">
       Canva embed link
       ${infoTooltip("Use the public embed link, add ?embed at the end", {
-        align: "right",
+        full: true,
         highlight: "?embed",
       })}
     </label>

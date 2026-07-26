@@ -35,6 +35,10 @@ const COVER_PRESETS = [
   "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?w=400&h=220&fit=crop&auto=format",
 ];
 
+// Hard cap for the course description. Mirrored server-side in
+// backend/src/api/course/course.services.js — keep both in sync.
+const MAX_DESCRIPTION = 100;
+
 const icon = {
   back: `<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>`,
   cap: `<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>`,
@@ -190,8 +194,12 @@ function leftPanel() {
             </select>
           </div>
           <div>
-            <label class="block text-xs font-medium mb-1">Description</label>
-            <textarea name="description" rows="3"
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs font-medium">Description</label>
+              <span class="js-desc-count text-[10px] font-medium"
+                    style="color: ${state.description.length >= 90 ? "#dc2626" : "var(--muted-foreground)"}">${state.description.length}/${MAX_DESCRIPTION}</span>
+            </div>
+            <textarea name="description" rows="3" maxlength="${MAX_DESCRIPTION}"
               class="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none"
               style="background: var(--muted); border: 1px solid var(--border)">${state.description}</textarea>
           </div>
@@ -455,6 +463,20 @@ function buildPayload() {
 // ─── Events ───────────────────────────────────────────────────────────────────
 function attachEvents(root) {
   initNavbar(root);
+
+  // Live character counter for the description. It lives here (and not at
+  // module level) because rerender() rebuilds the DOM on every repaint.
+  const descInput = root.querySelector('[name="description"]');
+  const descCount = root.querySelector(".js-desc-count");
+  if (descInput && descCount) {
+    descInput.addEventListener("input", () => {
+      const len = descInput.value.length;
+      descCount.textContent = `${len}/${MAX_DESCRIPTION}`;
+      // Turns red when there is little room left, so hitting the cap does not
+      // feel like the keyboard stopped responding.
+      descCount.style.color = len >= 90 ? "#dc2626" : "var(--muted-foreground)";
+    });
+  }
 
   root.querySelector(".js-back").addEventListener("click", () => navigate("/tutor"));
   root.querySelector(".js-cancel").addEventListener("click", () => navigate("/tutor"));

@@ -1,4 +1,3 @@
-
 // ─── Course Editor (Tutor) ────────────────────────────────────────────────────
 // Create or edit a course. Replica of Figma design.
 //
@@ -386,14 +385,17 @@ function captureTab(root) {
   }
 }
 
-// ─── Save button loading state ───────────────────────────────────────────────
-// Prevents duplicated courses caused by repeated clicks while the request
-// is still in flight.
-let isSaving = false;
+// ─── Button loading state ────────────────────────────────────────────────────
+// Prevents duplicated courses caused by repeated clicks while a save request
+// is still in flight. Shared by "Save Course" and "Preview as student",
+// because both of them hit createCourse / updateCourse.
+let isBusy = false;
 
-const SAVING_MARKUP = `
+// `label` is wrapped in the same "hidden sm:inline" the Preview button uses,
+// so the icon-only layout on small screens is preserved.
+const loadingMarkup = (label, responsiveLabel) => `
   <span class="inline-flex items-center gap-1">
-    Saving
+    <span class="${responsiveLabel ? "hidden sm:inline" : ""}">${label}</span>
     <span class="inline-flex gap-0.5">
       <span class="animate-bounce" style="animation-delay: 0ms">.</span>
       <span class="animate-bounce" style="animation-delay: 150ms">.</span>
@@ -401,11 +403,11 @@ const SAVING_MARKUP = `
     </span>
   </span>`;
 
-function setSaving(btn, saving) {
+function setBtnLoading(btn, loading, label = "Saving", responsiveLabel = false) {
   if (!btn) return;
-  isSaving = saving;
+  isBusy = loading;
 
-  if (saving) {
+  if (loading) {
     // Keep the original markup so it can be restored if the request fails.
     if (!btn.dataset.originalHtml) btn.dataset.originalHtml = btn.innerHTML;
     btn.disabled = true;
@@ -413,7 +415,7 @@ function setSaving(btn, saving) {
     btn.style.opacity = "0.7";
     btn.style.cursor = "not-allowed";
     btn.setAttribute("aria-busy", "true");
-    btn.innerHTML = SAVING_MARKUP;
+    btn.innerHTML = loadingMarkup(label, responsiveLabel);
     return;
   }
 
@@ -457,13 +459,20 @@ function attachEvents(root) {
   root.querySelector(".js-back").addEventListener("click", () => navigate("/tutor"));
   root.querySelector(".js-cancel").addEventListener("click", () => navigate("/tutor"));
   // "Preview as student": saves first (to see actual content) and opens course view
-  root.querySelector(".js-preview").addEventListener("click", async () => {
-    captureAll(root);
+  const previewBtn = root.querySelector(".js-preview");
+
+  previewBtn.addEventListener("click", async () => {
+    // Preview also saves the course, so it needs the same lock as Save.
+    if (isBusy) return;
+
     const msg = root.querySelector(".js-msg");
+    setBtnLoading(previewBtn, true, "Preparing preview", true);
+    captureAll(root);
 
     if (!state.title.trim()) {
       msg.style.color = "#dc2626";
       msg.textContent = "Add a title before previewing";
+      setBtnLoading(previewBtn, false);
       return;
     }
 
@@ -479,10 +488,13 @@ function attachEvents(root) {
       syncStateFromServer(saved);
       // ?preview=1 -> course view shows the "viewing as a student" banner
       // from=editor -> when exiting preview, returns HERE (not to home)
+      // Stays disabled on success: we leave the editor immediately.
       navigate(`/student/course?id=${editingId}&preview=1&from=editor`);
     } catch (err) {
       msg.style.color = "#dc2626";
       msg.textContent = err.message;
+      // Failure: restore the button so the tutor can retry.
+      setBtnLoading(previewBtn, false);
     }
   });
 
@@ -612,16 +624,16 @@ function attachEvents(root) {
   saveBtn.addEventListener("click", async () => {
     // Extra guard: even if a click sneaks through (double click, Enter key),
     // it never starts a second request.
-    if (isSaving) return;
+    if (isBusy) return;
 
     const msg = root.querySelector(".js-msg");
-    setSaving(saveBtn, true);
+    setBtnLoading(saveBtn, true, "Saving");
     captureAll(root);
 
     if (!state.title.trim()) {
       msg.style.color = "#dc2626";
       msg.textContent = "The course needs a title";
-      setSaving(saveBtn, false);
+      setBtnLoading(saveBtn, false);
       return;
     }
 
@@ -649,7 +661,7 @@ function attachEvents(root) {
       msg.style.color = "#dc2626";
       msg.textContent = err.message;
       // Failure: restore the button so the tutor can retry.
-      setSaving(saveBtn, false);
+      setBtnLoading(saveBtn, false);
     }
   });
 }
@@ -857,7 +869,7 @@ function syncStateFromServer(saved) {
 // ─── Init ────────────────────────────────────────────────────────────────────
 export async function initCourseEditor() {
   const root = document.getElementById("app");
-  isSaving = false;   // fresh editor: the flag never survives a navigation
+  isBusy = false;   // fresh editor: the flag never survives a navigation
 
   // ?id=X in URL -> edit existing course (loaded COMPLETE from the backend)
   const params = new URLSearchParams(location.search);

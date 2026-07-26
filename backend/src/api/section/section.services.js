@@ -25,8 +25,8 @@ export const sectionServices = {
   },
 
   /**
-   * GET /api/sections/:id/items — agregado de welcome + contents + review + quizz.
-   * El quizz/review pierden el campo "correct"/soluciones si quien pregunta es student.
+   * GET /api/sections/:id/items — aggregation of welcome + contents + review + quiz.
+   * The quiz/review omits the "correct" field/solutions if the requester is a student.
    */
   getSectionItemsAggregate: async (sectionId, userContext) => {
     const section = await sectionRepository.findById(sectionId);
@@ -49,7 +49,7 @@ export const sectionServices = {
   },
 };
 
-// Nunca se envían las respuestas correctas al frontend de un student.
+// The correct answers are never sent to a student's frontend.
 function sanitizeQuizz(item, isStudent) {
   const payload = { points: item.points, questions: item.payload.questions || [] };
   if (isStudent) {

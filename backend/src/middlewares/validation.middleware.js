@@ -1,4 +1,4 @@
-// Valida que existan los campos obligatorios en el body
+// Validate that the mandatory fields exist in the body.
 export const validateBody = (fields = []) => (req, res, next) => {
   const missing = fields.filter((f) => req.body[f] == null || req.body[f] === "");
   if (missing.length) {

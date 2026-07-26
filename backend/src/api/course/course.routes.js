@@ -15,27 +15,27 @@ import { validateBody } from "../../middlewares/validation.middleware.js";
 
 const router = Router();
 
-// 🎓 Catálogo general (para estudiantes y tutores)
+//  general catalog (for students and tutors)
 router.get("/", verifyJWT, getCourses);
 
-// 👨‍🏫 Panel del Tutor: solo los cursos del tutor autenticado
+//  Panel Tutor: only courses with authenticated tutor
 router.get("/mine", verifyJWT, authorizeRoles("tutor"), getMyCourses);
 
-// 📊 Stats agregadas del tutor autenticado
+//  Stats added for the authenticated tutor 
 router.get("/stats", verifyJWT, authorizeRoles("tutor"), getMyStats);
 
-// 📝 Crear curso (exclusivo Tutor)
+//  Create course (exclusive to Tutor)
 router.post("/", verifyJWT, authorizeRoles("tutor"), validateBody(["title"]), createCourse);
 
-// 🧩 Curso COMPLETO para el editor (curso + secciones + items + final)
+//   Complete Course for editor (course + sections + items + final)
 router.post("/full", verifyJWT, authorizeRoles("tutor"), validateBody(["title"]), createCourseFull);
 router.get("/:id/full", verifyJWT, authorizeRoles("tutor"), getCourseFull);
 router.put("/:id/full", verifyJWT, authorizeRoles("tutor"), validateBody(["title"]), updateCourseFull);
 
-// 🔍 Detalle de un curso puntual
+//specific detail of a course
 router.get("/:id", verifyJWT, getCourseById);
 
-// 🔄 Editar curso (exclusivo Tutor dueño)
+//  Edit course (exclusive for Tutor owner)
 router.put("/:id", verifyJWT, authorizeRoles("tutor"), updateCourse);
 
 export default router;

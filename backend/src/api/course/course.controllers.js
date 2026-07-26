@@ -11,7 +11,7 @@ export const getCourses = async (req, res, next) => {
   }
 };
 
-// GET /api/courses/mine — Cursos exclusivos del Tutor autenticado
+// GET /api/courses/mine — Exclusive courses from the authenticated tutor
 export const getMyCourses = async (req, res, next) => {
   try {
     const courses = await courseServices.getCoursesByTutor(req.user.id);
@@ -21,7 +21,7 @@ export const getMyCourses = async (req, res, next) => {
   }
 };
 
-// GET /api/courses/stats — Stats agregadas del tutor autenticado
+// GET /api/courses/stats — Stats added for authenticated tutor 
 export const getMyStats = async (req, res, next) => {
   try {
     const stats = await courseServices.getTutorStats(req.user.id);
@@ -31,7 +31,7 @@ export const getMyStats = async (req, res, next) => {
   }
 };
 
-// GET /api/courses/:id — Detalle de un curso
+// GET /api/courses/:id — course details
 export const getCourseById = async (req, res, next) => {
   try {
     const course = await courseServices.getCourseById(req.params.id, req.user);
@@ -42,7 +42,7 @@ export const getCourseById = async (req, res, next) => {
   }
 };
 
-// POST /api/courses — Crear un curso inyectando el tutor_id del Token
+// POST /api/courses — Create a course injecting tutor_id of the Token
 export const createCourse = async (req, res, next) => {
   try {
     const newCourse = await courseServices.createNewCourse(req.user.id, req.body);
@@ -52,7 +52,7 @@ export const createCourse = async (req, res, next) => {
   }
 };
 
-// PUT /api/courses/:id — Modificar un curso validando propiedad server-side
+// PUT /api/courses/:id — Modify a course validating server-side property
 export const updateCourse = async (req, res, next) => {
   try {
     const { id } = req.params;

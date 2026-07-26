@@ -1,7 +1,7 @@
 import { pool } from "../../config/postgres/postgres.db.js";
 
 export const leaderboardRepository = {
-  // Suma de puntos por estudiante en el curso (solo quizz + final; las reviews no puntúan).
+  // Adds points per student in the course (just quizzes + final; reviews dont count).
   findForCourse: async (courseId) => {
     const { rows } = await pool.query(
       `SELECT u.id, u.full_name AS name, COALESCE(SUM(s.points), 0)::int AS points

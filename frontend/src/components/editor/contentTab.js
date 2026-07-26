@@ -3,6 +3,8 @@
 // The add menu expands DOWNWARD with large cards,
 // and the button changes to "Cancel" while open.
 
+import { infoTooltip } from "../infoTooltip.js";
+
 const icon = {
   video: `<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2"/></svg>`,
   file: `<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>`,
@@ -52,7 +54,10 @@ function blockBody(block) {
 
   // canva
   return tituloField + `
-    <label class="block text-xs font-medium mb-1.5">Canva embed link</label>
+    <label class="block text-xs font-medium mb-1.5">
+      Canva embed link
+      ${infoTooltip("Use the public embed link, add ?embed at the end")}
+    </label>
     <input type="url" data-block-input="${block.id}" value="${block.datos || ""}"
       class="w-full px-3 py-2 rounded-lg text-sm outline-none"
       style="background: var(--muted); border: 1px solid var(--border)"

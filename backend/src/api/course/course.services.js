@@ -1,13 +1,13 @@
 import { courseRepository } from "./course.repository.js";
 
-// Genera un código único de curso (formato EDU-XXXX), igual que el frontend.
+// Generates a unique course code (EDU-XXXX format), just like the frontend.
 function generateCourseCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const rand = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
   return `EDU-${rand}`;
 }
 
-// Mapea la fila cruda de la DB al shape que espera el frontend.
+//Maps the raw database row to the shape expected by the frontend.
 function toPublicCourse(row, { hideCode } = {}) {
   const { is_enrolled, base_students, ...rest } = row;
   const course = { ...rest, baseStudents: base_students };
@@ -15,10 +15,24 @@ function toPublicCourse(row, { hideCode } = {}) {
   return course;
 }
 
+// The course description has a hard limit of 100 characters.
+// The frontend enforces this with `maxlength`, but the actual validation happens here:
+// we never rely on the client being the only filter.
+const MAX_DESCRIPTION = 100;
+
+function assertDescription(value) {
+  if (String(value ?? "").trim().length > MAX_DESCRIPTION) {
+    throw Object.assign(
+      new Error(`Description can't be over ${MAX_DESCRIPTION} characters`),
+      { status: 400 }
+    );
+  }
+}
+
 export const courseServices = {
   /**
-   * 🎓 Catálogo (Regla 1): students solo ven cursos "open" o donde ya están
-   * inscritos (aunque sean "code"). El course_code nunca se expone a students.
+   * Catalog (Rule 1): students  can only see "open" or where they are already enrolled
+   * ( "code"). course_code never gets exposed to students.
    */
   getCoursesForUser: async (userContext) => {
     const rows = await courseRepository.findAllWithStats(userContext.id);
@@ -29,7 +43,7 @@ export const courseServices = {
         .map((c) => toPublicCourse(c, { hideCode: true }));
     }
 
-    // Tutor: ve el catálogo completo para administración.
+    // Tutor: sees catalog for administration
     return rows.map((c) => toPublicCourse(c));
   },
 
@@ -47,14 +61,15 @@ export const courseServices = {
 
   createNewCourse: async (tutorId, payload) => {
     if (!payload.title?.trim()) {
-      throw Object.assign(new Error("El título del curso es obligatorio"), { status: 400 });
+      throw Object.assign(new Error("Course title is mandatory"), { status: 400 });
     }
+    assertDescription(payload.description);
 
     const visibility = payload.visibility === "code" ? "code" : "open";
     const course_code = visibility === "code" ? (payload.course_code || generateCourseCode()) : null;
 
     const created = await courseRepository.create({
-      tutor_id: Number(tutorId), // 🔒 nunca confiamos en el body para esto
+      tutor_id: Number(tutorId), // never trust body for this
       title: payload.title,
       instructor: payload.instructor || "Tutor",
       category: payload.category || "General",
@@ -71,11 +86,13 @@ export const courseServices = {
     const course = await courseRepository.findById(courseId);
     if (!course) return { error: "NOT_FOUND" };
 
-    // 🔴 Regla 3 — Validación de propiedad estricta del tutor dueño.
+    //  Rule 3 — tutor owner validation.
     if (course.tutor_id !== Number(tutorId)) return { error: "FORBIDDEN" };
 
-    // course_code es INMUTABLE una vez asignado; solo se genera si pasa a
-    // "code" por primera vez.
+    assertDescription(updatedData.description ?? course.description);
+
+    // course_code is INMUTABLE once assigned; can only be generated if it switches to 
+    // "code" for the first time.
     let course_code = course.course_code;
     const visibility = updatedData.visibility === "code" ? "code" : (updatedData.visibility || course.visibility);
     if (visibility === "code" && !course_code) {

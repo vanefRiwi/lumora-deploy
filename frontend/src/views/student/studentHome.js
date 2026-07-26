@@ -3,7 +3,7 @@
 // Data comes from data/courses.js (today mock, tomorrow the real API).
 
 import { navbar, initNavbar } from "../../components/navbar.js";
-import { courseCard } from "../../components/courseCard.js";
+import { courseCard, bindInfoTooltips } from "../../components/courseCard.js";
 import { getSession } from "../../helpers/auth.js";
 import { navigate } from "../../router/router.js";
 import { confirmModal } from "../../components/confirmModal.js";
@@ -151,11 +151,8 @@ function bindCardActions(root) {
       if (enrolledIds.includes(id)) navigate(`/student/course?id=${id}`);
     })
   );
-  // Info button: on touch devices a tap is needed to reveal the tooltip,
-  // so the click must not bubble up and open the course.
-  root.querySelectorAll("[data-info]").forEach((btn) =>
-    btn.addEventListener("click", (e) => e.stopPropagation())
-  );
+  // Info tooltip: hover on desktop, tap on mobile.
+  bindInfoTooltips(root);
 
   root.querySelectorAll("[data-join]").forEach((btn) =>
     btn.addEventListener("click", async (e) => {

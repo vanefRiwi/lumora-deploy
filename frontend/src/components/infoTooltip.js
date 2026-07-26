@@ -6,10 +6,12 @@
 // Usage:
 //   import { infoTooltip, bindInfoTooltips } from "../infoTooltip.js";
 //   `<label>Canva embed link ${infoTooltip("Your hint here")}</label>`
+//   `${infoTooltip("Add ?embed at the end", { highlight: "?embed" })}`
 //   ...and call bindInfoTooltips(root) after every render.
 
 const infoIcon = `<svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`;
 
+// The hint is plain text, so it is escaped before being injected.
 function esc(str = "") {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -18,11 +20,24 @@ function esc(str = "") {
     .replace(/"/g, "&quot;");
 }
 
-// `place` is "top" by default: inside a form the field below would be covered,
-// and a card with overflow-hidden could clip a downward tooltip.
-export function infoTooltip(text, { place = "top", align = "left" } = {}) {
+// `place` defaults to "top": inside a form a downward tooltip would cover the
+// field below, and a card with overflow-hidden could clip it.
+// `align` is the horizontal anchor: "right" makes the bubble grow leftwards,
+// which is what keeps it inside the viewport on narrow screens.
+// `highlight` paints one literal fragment of the hint in the primary color.
+export function infoTooltip(text, { place = "top", align = "left", highlight = "" } = {}) {
   const pos = place === "bottom" ? "top-full mt-2" : "bottom-full mb-2";
   const side = align === "right" ? "right-0" : "left-0";
+
+  // Escape first, then colorize: the highlight is matched against the already
+  // escaped text, so it can never be used to inject markup.
+  let body = esc(text);
+  if (highlight) {
+    const needle = esc(highlight);
+    body = body.split(needle).join(
+      `<strong class="font-semibold" style="color: var(--primary)">${needle}</strong>`
+    );
+  }
 
   return `
     <span class="js-info group/info relative inline-flex align-middle ml-1">
@@ -32,7 +47,7 @@ export function infoTooltip(text, { place = "top", align = "left" } = {}) {
         style="background: var(--secondary); color: var(--primary)">${infoIcon}</button>
 
       <span role="tooltip"
-        class="js-tip pointer-events-none absolute ${pos} ${side} z-30 w-52 max-w-[calc(100vw-3rem)]
+        class="js-tip pointer-events-none absolute ${pos} ${side} z-30 w-56 max-w-[calc(100vw-4rem)]
                p-2.5 rounded-lg text-[11px] font-normal leading-relaxed text-left normal-case
                opacity-0 invisible translate-y-1
                transition-all duration-200 ease-out
@@ -42,7 +57,7 @@ export function infoTooltip(text, { place = "top", align = "left" } = {}) {
                -webkit-backdrop-filter: blur(10px);
                border: 1px solid var(--border);
                color: var(--foreground);
-               box-shadow: 0 8px 24px rgba(15, 31, 15, 0.14)">${esc(text)}</span>
+               box-shadow: 0 8px 24px rgba(15, 31, 15, 0.14)">${body}</span>
     </span>`;
 }
 
@@ -54,6 +69,7 @@ function closeAllInfo() {
   });
 }
 
+// Registered once for the whole app: tapping anywhere else closes the tooltip.
 if (!window.__lumoraInfoTooltipBound) {
   window.__lumoraInfoTooltipBound = true;
   document.addEventListener("click", closeAllInfo);
@@ -65,12 +81,17 @@ export function bindInfoTooltips(root = document) {
     const btn = wrapper.querySelector("[data-info]");
     const tip = wrapper.querySelector(".js-tip");
     if (!btn || !tip) return;
-    if (btn.dataset.bound === "1") return;   // attachEvents runs on every rerender
+
+    // attachEvents runs again on every rerender, so without this guard the
+    // listeners would stack up and cancel each other out.
+    if (btn.dataset.bound === "1") return;
     btn.dataset.bound = "1";
 
     btn.addEventListener("click", (e) => {
+      // Must not reach whatever sits underneath.
       e.stopPropagation();
       e.preventDefault();
+
       const wasOpen = tip.style.visibility === "visible";
       closeAllInfo();
       if (!wasOpen) {

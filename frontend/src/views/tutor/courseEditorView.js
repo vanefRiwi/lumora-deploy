@@ -1,3 +1,4 @@
+
 // ─── Course Editor (Tutor) ────────────────────────────────────────────────────
 // Create or edit a course. Replica of Figma design.
 //
@@ -19,6 +20,7 @@ import { navigate } from "../../router/router.js";
 import { showToast } from "../../helpers/toast.js";
 import { confirmModal } from "../../components/confirmModal.js";
 import { promptModal } from "../../components/promptModal.js";
+import { bindInfoTooltips } from "../../components/infoTooltip.js";
 import {
   getCourseFull,
   createCourse,
@@ -477,6 +479,10 @@ function attachEvents(root) {
       descCount.style.color = len >= 90 ? "#dc2626" : "var(--muted-foreground)";
     });
   }
+
+  // Info tooltips (hover on desktop, tap on mobile). rerender() calls
+  // attachEvents again, so tab switches and new blocks stay covered.
+  bindInfoTooltips(root);
 
   root.querySelector(".js-back").addEventListener("click", () => navigate("/tutor"));
   root.querySelector(".js-cancel").addEventListener("click", () => navigate("/tutor"));

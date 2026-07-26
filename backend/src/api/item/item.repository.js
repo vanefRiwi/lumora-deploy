@@ -1,7 +1,7 @@
 import { pool } from "../../config/postgres/postgres.db.js";
 
 export const itemRepository = {
-  // ── welcome / review / quizz: un único registro por sección ──
+  // ── welcome / review / quizz: one unique register per section ──
   findSingle: async (sectionId, tipoItem) => {
     const { rows } = await pool.query(
       `SELECT id, section_id, tipo_item, payload, points FROM items
@@ -30,7 +30,7 @@ export const itemRepository = {
     return rows[0];
   },
 
-  // ── final assessment: un único registro por curso ──
+  // ── final assessment: one unique register per course ──
   findFinal: async (courseId) => {
     const { rows } = await pool.query(
       `SELECT id, course_id, payload, points FROM items WHERE course_id = $1 AND tipo_item = 'final';`,
@@ -58,7 +58,7 @@ export const itemRepository = {
     return rows[0];
   },
 
-  // ── content: múltiples bloques por sección, con CRUD propio ──
+  // ── content: multiple blocks per section, with its own CRUD  ──
   findContents: async (sectionId) => {
     const { rows } = await pool.query(
       `SELECT id, section_id, titulo, tipo, payload, orden FROM items

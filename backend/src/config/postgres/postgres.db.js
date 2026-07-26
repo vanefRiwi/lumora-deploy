@@ -55,7 +55,7 @@ export const verifyConnection = async () => {
     console.log("✅ [Database]: Successful initial connection to PostgreSQL through the pool.");
     client.release();
 
-    // 🏗️ Creates the tables if they don't exist (idempotent).
+    // Creates the tables if they don't exist (idempotent).
     await ensureSchema();
 
     const res = await pool.query("SELECT COUNT(*) FROM users;");
